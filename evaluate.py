@@ -8,7 +8,10 @@ from pipeline import SeaDinoPipeline
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate Tiny-Big Probes for SeaDino-Seg-1 Models.")
     
-    parser.add_argument('--mode', type=str, choices=['heatmaps', 'compare', 'all'], default='all')
+    parser.add_argument('--mode', type=str, 
+                        choices=['heatmaps', 'compare', 'compare_single', 'generate', 'all'], 
+                        default='all')
+    
     parser.add_argument('--hf_repo', type=str, default="Neel536/Algea_Segmentation_Model")
     parser.add_argument('--sizes', type=str, nargs='+', choices=['tiny', 'small', 'medium', 'big'], default=['small'])
     
@@ -31,8 +34,7 @@ def parse_args():
 
     parser.add_argument('--eval_h', type=int, default=1088)
     parser.add_argument('--eval_w', type=int, default=1920)
-
-    parser.add_argument('--dpi', type=int, default=200, help="Image save quality (100 to 600).")
+    parser.add_argument('--dpi', type=int, default=200)
     
     args = parser.parse_args()
     
@@ -46,13 +48,11 @@ def parse_args():
     return args
 
 def main():
-    # Setup global logger format
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
-    
     args = parse_args()
     config = SeaDinoConfig(eval_h=args.eval_h, eval_w=args.eval_w, dpi=args.dpi)
     
