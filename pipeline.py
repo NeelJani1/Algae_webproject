@@ -169,7 +169,7 @@ class SeaDinoPipeline:
                 r, g, b = (self.config.color_palette[c] * 255).astype(int)
                 ui_legend[class_name] = f"#{r:02x}{g:02x}{b:02x}"
             
-            # --- Structure the final JSON using Fred's grouped logic ---
+            # --- Structure the final JSON using grouped logic ---
             final_web_payload = {
                 "ui_legend": ui_legend,
                 "survey_results": list(self.web_manifest_dict.values())
@@ -306,7 +306,7 @@ class SeaDinoPipeline:
                     class_name = self.id_to_class.get(c, f"Class {c}")
                     spread_data[class_name] = round(float(spread_pct[c]), 2)
                 
-                # 5. Populate Fred's prediction dictionary (No Arrays to loop over!)
+                # 5. Populate the prediction dictionary (No Arrays to loop over!)
                 prediction_key = f"{display_name}-{size}"
                 self.web_manifest_dict[sample_img]["predictions"][prediction_key] = {
                     "overlay_mask": f"{folder_name}/{mask_name}",

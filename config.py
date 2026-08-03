@@ -31,7 +31,7 @@ class SeaDinoConfig:
             new_w = (self.eval_w // self.patch_size) * self.patch_size
             self.eval_w = new_w
             
-        # 🌟 NEW: Restrict DPI to a safe 100-600 range
+        # Restrict DPI to a safe 100-600 range
         if not (100 <= self.dpi <= 600):
             logger.warning(f"DPI {self.dpi} is outside safe range (100-600). Clamping it.")
             self.dpi = max(100, min(self.dpi, 600))
