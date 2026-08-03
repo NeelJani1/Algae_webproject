@@ -9,8 +9,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate Tiny-Big Probes for SeaDino-Seg-1 Models.")
     
     parser.add_argument('--mode', type=str, 
-                        choices=['heatmaps', 'compare', 'compare_single', 'generate', 'all'], 
+                        choices=['heatmaps', 'compare', 'compare_single', 'generate', 'all', 'web_ui'], 
                         default='all')
+    parser.add_argument('--web_out_dir', type=str, default="web_ui_outputs", 
+                        help="Directory to save raw overlay masks and JSON manifests for the Web UI.")
     
     parser.add_argument('--hf_repo', type=str, default="Neel536/Algea_Segmentation_Model")
     parser.add_argument('--sizes', type=str, nargs='+', choices=['tiny', 'small', 'medium', 'big'], default=['small'])
@@ -31,6 +33,7 @@ def parse_args():
     parser.add_argument('--base_dir', type=str, default="/home/neel/d_drive/ai_data/data/data_to_ivy")
     parser.add_argument('--masks_dir', type=str, default=None)
     parser.add_argument('--num_imgs', type=int, default=20)
+    parser.add_argument('--image', type=str, default=None, help="Path to a single image file (overrides base_dir loop).")
 
     parser.add_argument('--eval_h', type=int, default=1088)
     parser.add_argument('--eval_w', type=int, default=1920)

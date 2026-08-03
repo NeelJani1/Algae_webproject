@@ -3,6 +3,8 @@ import gc
 import json
 import logging
 import argparse
+import textwrap 
+import shutil
 from pathlib import Path
 from typing import Dict, Tuple, Any
 
@@ -32,6 +34,9 @@ class SeaDinoPipeline:
         self.class_map, self.id_to_class, self.num_classes = self._load_class_map()
         self.active_models = self._initialize_models()
         
+        # Web UI dictionary to group by image
+        self.web_manifest_dict = {}
+
         # Global Trackers for Total Coverage
         self.total_metrics = {
             size: {
@@ -82,9 +87,9 @@ class SeaDinoPipeline:
 
     def _initialize_models(self) -> Dict[str, Any]:
         models = {}
-        if self.args.run_base: 
+        if getattr(self.args, 'run_base', False): 
             models['org'] = {'display_name': 'SeaDino-Seg-1-Org', 'backbone': self._load_backbone(False, None), 'probes': []}
-        if self.args.run_ft: 
+        if getattr(self.args, 'run_ft', False): 
             models['fg'] = {'display_name': 'SeaDino-Seg-1-Fg', 'backbone': self._load_backbone(True, self.args.ft_ckpt), 'probes': []}
 
         for bb_type in list(models.keys()):
@@ -115,19 +120,73 @@ class SeaDinoPipeline:
             logger.error("No valid probes found to run. Exiting.")
             return
 
-        image_files = sorted([f for f in os.listdir(os.path.join(self.args.base_dir, "raw_images")) if f.endswith(('.jpg', '.png', '.jpeg'))])
-        num_images = min(self.args.num_imgs, len(image_files))
-
-        for i in range(num_images):
-            self._process_single_image(image_files[i], i + 1, num_images)
+        # Single Image Override
+        if getattr(self.args, 'image', None):
+            img_path = self.args.image
+            if not os.path.exists(img_path):
+                logger.error(f"Image not found at {img_path}")
+                return
             
-        self._generate_final_summary(num_images)
+            sample_img = os.path.basename(img_path)
+            logger.info(f"Processing single image: {sample_img}")
+            self._process_single_image(sample_img, img_path, 1, 1)
+            
+        # Standard Folder Loop
+        else:
+            potential_raw_dir = os.path.join(self.args.base_dir, "raw_images")
+            if os.path.isdir(potential_raw_dir):
+                img_dir = potential_raw_dir
+            else:
+                img_dir = self.args.base_dir
+
+            if not os.path.exists(img_dir):
+                logger.error(f"Directory {img_dir} does not exist.")
+                return
+                
+            image_files = sorted([f for f in os.listdir(img_dir) if f.endswith(('.jpg', '.png', '.jpeg'))])
+            
+            if len(image_files) == 0:
+                logger.error(f"No images (.jpg, .png) found in {img_dir}")
+                return
+
+            num_images = min(self.args.num_imgs, len(image_files))
+
+            for i in range(num_images):
+                img_path = os.path.join(img_dir, image_files[i])
+                self._process_single_image(image_files[i], img_path, i + 1, num_images)
+                
+            self._generate_final_summary(num_images)
+
+        # Dump Highly Master Manifest of json
+        if getattr(self.args, 'mode', 'all') in ['web_ui', 'all']:
+            web_out_dir = Path(getattr(self.args, 'web_out_dir', 'web_ui_outputs'))
+            web_out_dir.mkdir(parents=True, exist_ok=True)
+            
+            # --- Convert Numpy Palette to Web Hex Colors ---
+            ui_legend = {}
+            for c in range(self.num_classes):
+                class_name = self.id_to_class.get(c, f"Class {c}")
+                r, g, b = (self.config.color_palette[c] * 255).astype(int)
+                ui_legend[class_name] = f"#{r:02x}{g:02x}{b:02x}"
+            
+            # --- Structure the final JSON using Fred's grouped logic ---
+            final_web_payload = {
+                "ui_legend": ui_legend,
+                "survey_results": list(self.web_manifest_dict.values())
+            }
+            
+            manifest_path = web_out_dir / "outputs.json"
+            with open(manifest_path, 'w') as f:
+                json.dump(final_web_payload, f, indent=4)
+            logger.info(f"✅ Web UI Master Manifest saved to: {manifest_path}")
+
         logger.info("SeaDino evaluation pipeline finished successfully!")
 
-    def _process_single_image(self, sample_img: str, current_idx: int, total_imgs: int):
+    def _process_single_image(self, sample_img: str, img_path: str, current_idx: int, total_imgs: int):
         base_name = os.path.splitext(sample_img)[0]
-        img_path = os.path.join(self.args.base_dir, "raw_images", sample_img)
-        mask_path = os.path.join(self.args.masks_dir, base_name + '.png')
+        
+        # Safely determine mask path
+        mask_path = os.path.join(self.args.masks_dir, base_name + '.png') if getattr(self.args, 'masks_dir', None) else ""
 
         img_pil = TF.resize(Image.open(img_path).convert("RGB"), [self.config.eval_h, self.config.eval_w], interpolation=TF.InterpolationMode.BILINEAR)
         img_np = np.array(img_pil)
@@ -177,6 +236,7 @@ class SeaDinoPipeline:
 
         # --- VISUALIZATION SETUP (Load GT Mask once per image) ---
         gt_colored = None
+        gt_mask = None 
         if os.path.exists(mask_path):
             mask_tensor = TF.resize(Image.open(mask_path).convert("L"), [self.config.eval_h, self.config.eval_w], interpolation=TF.InterpolationMode.NEAREST)
             gt_mask = np.array(mask_tensor)
@@ -187,20 +247,71 @@ class SeaDinoPipeline:
             self._plot_heatmaps(sample_img, base_name, img_np, results)
             
         if self.args.mode in ['compare', 'all']:
-            self._plot_comparison(sample_img, base_name, img_np, gt_colored, results)
+            self._plot_comparison(sample_img, base_name, img_np, gt_colored, gt_mask, results) 
             
         if self.args.mode in ['compare_single', 'all']:
             if gt_colored is not None:
-                self._plot_compare_single(sample_img, base_name, img_np, gt_colored, results)
+                self._plot_compare_single(sample_img, base_name, img_np, gt_colored, gt_mask, results) 
             else:
                 logger.warning(f"Skipping compare_single: No GT mask found for {sample_img}")
                 
         if self.args.mode in ['generate', 'all']:
             self._plot_generate(sample_img, base_name, img_np, results)
+            
+        # Web UI Asset Exporter Dispatch
+        if self.args.mode in ['web_ui', 'all']:
+            self._export_web_ui(sample_img, base_name, img_np, results)
 
-        del img_input, img_np, img_pil, results
-        self._clean_memory()
-        logger.info(f"[{current_idx}/{total_imgs}] Finished visual exports for: {sample_img}")
+    # Web UI Assets Generation Function
+    def _export_web_ui(self, sample_img: str, base_name: str, img_np: np.ndarray, results: dict):
+        web_out_dir = Path(getattr(self.args, 'web_out_dir', 'web_ui_outputs'))
+        web_out_dir.mkdir(parents=True, exist_ok=True)
+        folder_name = web_out_dir.name
+        
+        # 1. Copy the raw input image to the web folder
+        web_input_path = web_out_dir / sample_img
+        original_img_path = os.path.join(self.args.base_dir, sample_img)
+        potential_raw_dir = os.path.join(self.args.base_dir, "raw_images")
+        if os.path.isdir(potential_raw_dir):
+            original_img_path = os.path.join(potential_raw_dir, sample_img)
+
+        if not web_input_path.exists() and os.path.exists(original_img_path):
+            shutil.copy(original_img_path, web_input_path)
+
+        # 2. Group by image in the manifest dictionary
+        if sample_img not in self.web_manifest_dict:
+            self.web_manifest_dict[sample_img] = {
+                "input": f"{folder_name}/{sample_img}",
+                "predictions": {}
+            }
+
+        for size, bb_results in results.items():
+            for bb_type, res in bb_results.items():
+                display_name = self.active_models[bb_type]['display_name']
+                pred = res["pred"]
+                spread_pct = res["spread_pct"]
+                
+                # 3. Create a PURE TRANSPARENT MASK
+                pred_rgb = (self.config.color_palette[pred] * 255).astype(np.uint8)
+                alpha = np.where(pred == 0, 0, 153).astype(np.uint8)
+                
+                mask_pil = Image.fromarray(np.dstack((pred_rgb, alpha)), "RGBA")
+                mask_name = f"overlay_{base_name}_{bb_type}-{size}.png"
+                mask_path = web_out_dir / mask_name
+                mask_pil.save(mask_path, format="PNG")
+                
+                # 4. Extract nicely rounded spread calculations
+                spread_data = {}
+                for c in range(self.num_classes):
+                    class_name = self.id_to_class.get(c, f"Class {c}")
+                    spread_data[class_name] = round(float(spread_pct[c]), 2)
+                
+                # 5. Populate Fred's prediction dictionary (No Arrays to loop over!)
+                prediction_key = f"{display_name}-{size}"
+                self.web_manifest_dict[sample_img]["predictions"][prediction_key] = {
+                    "overlay_mask": f"{folder_name}/{mask_name}",
+                    "coverage": spread_data
+                }
 
     def _generate_final_summary(self, total_images: int):
         print("\n" + "="*65)
@@ -239,7 +350,7 @@ class SeaDinoPipeline:
                 
                 present_classes = np.unique(pred)
                 legend_patches = [
-                    mpatches.Patch(color=self.config.color_palette[c], label=f"{self.id_to_class.get(c, f'Class {c}')} ({spread_pct[c]:.1f}%)")
+                    mpatches.Patch(color=self.config.color_palette[c], label=f"{self.id_to_class.get(c, f'Class {c}')} ({spread_pct[c]:.2f}%)")
                     for c in present_classes
                 ]
                 axes[1].legend(handles=legend_patches, bbox_to_anchor=(0.0, -0.05), loc='upper left', ncol=2)
@@ -256,7 +367,13 @@ class SeaDinoPipeline:
                 fig.clf() 
                 plt.close(fig)
 
-    def _plot_comparison(self, sample_img: str, base_name: str, img_np: np.ndarray, gt_colored: np.ndarray, results: dict):
+    def _plot_comparison(self, sample_img: str, base_name: str, img_np: np.ndarray, gt_colored: np.ndarray, gt_mask: np.ndarray, results: dict):
+        rgba_gt = None
+        if gt_colored is not None and gt_mask is not None:
+            gt_safe = np.where(gt_mask < len(self.config.color_palette), gt_mask, 0)
+            gt_alpha = np.where(gt_safe == 0, 0.0, 0.6)
+            rgba_gt = np.dstack((gt_colored, gt_alpha))
+
         for size, bb_results in results.items():
             if not bb_results: continue 
             
@@ -267,34 +384,53 @@ class SeaDinoPipeline:
             axes = axes.flatten()
             axes[0].imshow(img_np); axes[0].set_title(f"Input Image\n{sample_img}", fontsize=14); axes[0].axis('off')
             
-            if gt_colored is not None:
-                axes[1].imshow(gt_colored); axes[1].set_title("Ground Truth Pseudo-Mask", fontsize=14)
+            if rgba_gt is not None:
+                axes[1].imshow(img_np)
+                axes[1].imshow(rgba_gt)
+                axes[1].set_title("Ground Truth Overlay", fontsize=14)
             else:
                 axes[1].text(0.5, 0.5, "GT Mask Not Found", ha='center', va='center', fontsize=20, color='gray'); axes[1].set_title("Ground Truth", fontsize=14)
             axes[1].axis('off')
 
             if 'fg' in bb_results:
-                axes[2].imshow(self.config.color_palette[bb_results['fg']['pred']])
-                axes[2].set_title(f"SeaDino-Seg-1-Fg ({size.capitalize()})", fontsize=14, fontweight='bold')
+                pred = bb_results['fg']['pred']
+                rgba_fg = np.dstack((self.config.color_palette[pred], np.where(pred == 0, 0.0, 0.6)))
+                axes[2].imshow(img_np)
+                axes[2].imshow(rgba_fg)
+                axes[2].set_title(f"SeaDino-Seg-1-Fg Overlay ({size.capitalize()})", fontsize=14, fontweight='bold')
             else:
                 axes[2].text(0.5, 0.5, "No SeaDino-Seg-1-Fg Loaded", ha='center', va='center', fontsize=20, color='gray')
             axes[2].axis('off')
 
             if 'org' in bb_results:
-                axes[3].imshow(self.config.color_palette[bb_results['org']['pred']])
-                axes[3].set_title(f"SeaDino-Seg-1-Org ({size.capitalize()})", fontsize=14)
+                pred = bb_results['org']['pred']
+                rgba_org = np.dstack((self.config.color_palette[pred], np.where(pred == 0, 0.0, 0.6)))
+                axes[3].imshow(img_np)
+                axes[3].imshow(rgba_org)
+                axes[3].set_title(f"SeaDino-Seg-1-Org Overlay ({size.capitalize()})", fontsize=14)
             else:
                 axes[3].text(0.5, 0.5, "No SeaDino-Seg-1-Org Loaded", ha='center', va='center', fontsize=20, color='gray')
             axes[3].axis('off')
 
-            fig.legend(handles=[mpatches.Patch(color=self.config.color_palette[c], label=self.id_to_class.get(c, f"Class {c}")) for c in range(self.num_classes)], loc='lower center', ncol=6, bbox_to_anchor=(0.5, 0.02), fontsize=14)
-            plt.tight_layout(rect=[0, 0.05, 1, 1]) 
-            plt.savefig(out_dir / f"compare_{base_name}_{size}.png", dpi=self.config.dpi)
+            legend_patches = []
+            for c in range(self.num_classes):
+                raw_name = self.id_to_class.get(c, f"Class {c}").replace('_', ' ')
+                clean_name = textwrap.fill(raw_name, width=25) 
+                legend_patches.append(mpatches.Patch(color=self.config.color_palette[c], label=clean_name))
+
+            fig.legend(handles=legend_patches, loc='lower center', ncol=3, bbox_to_anchor=(0.5, 0.0), fontsize=14)
+            plt.tight_layout(rect=[0, 0.08, 1, 1]) 
+            
+            plt.savefig(out_dir / f"compare_{base_name}_{size}.png", dpi=self.config.dpi, bbox_inches='tight')
             fig.clf() 
             plt.close(fig)
 
-    def _plot_compare_single(self, sample_img: str, base_name: str, img_np: np.ndarray, gt_colored: np.ndarray, results: dict):
-        """Generates 1x3 comparison grid: Input, GT Mask, and Prediction for a single active model."""
+
+    def _plot_compare_single(self, sample_img: str, base_name: str, img_np: np.ndarray, gt_colored: np.ndarray, gt_mask: np.ndarray, results: dict):
+        gt_safe = np.where(gt_mask < len(self.config.color_palette), gt_mask, 0)
+        gt_alpha = np.where(gt_safe == 0, 0.0, 0.6)
+        rgba_gt = np.dstack((gt_colored, gt_alpha))
+
         for size, bb_results in results.items():
             for bb_type, res in bb_results.items():
                 display_name = self.active_models[bb_type]['display_name']
@@ -303,36 +439,30 @@ class SeaDinoPipeline:
 
                 pred, spread_pct = res["pred"], res["spread_pct"]
                 pred_colored = self.config.color_palette[pred]
+                rgba_pred = np.dstack((pred_colored, np.where(pred == 0, 0.0, 0.6)))
 
                 fig, axes = plt.subplots(1, 3, figsize=(24, 8))
                 
-                axes[0].imshow(img_np)
-                axes[0].set_title(f"Input Image\n{sample_img}", fontsize=14)
-                axes[0].axis('off')
+                axes[0].imshow(img_np); axes[0].set_title(f"Input Image\n{sample_img}", fontsize=14); axes[0].axis('off')
+                axes[1].imshow(img_np); axes[1].imshow(rgba_gt); axes[1].set_title("Ground Truth Overlay", fontsize=14); axes[1].axis('off')
+                axes[2].imshow(img_np); axes[2].imshow(rgba_pred); axes[2].set_title(f"{display_name} Overlay ({size.capitalize()})", fontsize=14, fontweight='bold'); axes[2].axis('off')
 
-                axes[1].imshow(gt_colored)
-                axes[1].set_title("Ground Truth Mask", fontsize=14)
-                axes[1].axis('off')
-
-                axes[2].imshow(pred_colored)
-                axes[2].set_title(f"{display_name} ({size.capitalize()})", fontsize=14, fontweight='bold')
-                axes[2].axis('off')
-
-                # Legend with cover percentages
                 present_classes = np.unique(pred)
-                legend_patches = [
-                    mpatches.Patch(color=self.config.color_palette[c], label=f"{self.id_to_class.get(c, f'Class {c}')} ({spread_pct[c]:.1f}%)")
-                    for c in present_classes
-                ]
-                fig.legend(handles=legend_patches, loc='lower center', ncol=6, bbox_to_anchor=(0.5, 0.02), fontsize=14)
-                plt.tight_layout(rect=[0, 0.08, 1, 1]) 
+                legend_patches = []
+                for c in present_classes:
+                    raw_name = self.id_to_class.get(c, f"Class {c}").replace('_', ' ')
+                    clean_name = textwrap.fill(raw_name, width=25)
+                    label_str = f"{clean_name}\n({spread_pct[c]:.2f}%)"
+                    legend_patches.append(mpatches.Patch(color=self.config.color_palette[c], label=label_str))
+
+                fig.legend(handles=legend_patches, loc='lower center', ncol=3, bbox_to_anchor=(0.5, 0.0), fontsize=14)
+                plt.tight_layout(rect=[0, 0.12, 1, 1]) 
                 
-                plt.savefig(out_dir / f"compare_single_{base_name}_{display_name}_{size}.png", dpi=self.config.dpi)
+                plt.savefig(out_dir / f"compare_single_{base_name}_{display_name}_{size}.png", dpi=self.config.dpi, bbox_inches='tight')
                 fig.clf()
                 plt.close(fig)
 
     def _plot_generate(self, sample_img: str, base_name: str, img_np: np.ndarray, results: dict):
-        """Generates 1x3 mask generation grid: Input, Predicted Mask, and Mask Overlay."""
         for size, bb_results in results.items():
             for bb_type, res in bb_results.items():
                 display_name = self.active_models[bb_type]['display_name']
@@ -345,32 +475,26 @@ class SeaDinoPipeline:
 
                 fig, axes = plt.subplots(1, 3, figsize=(24, 8))
                 
-                axes[0].imshow(img_np)
-                axes[0].set_title(f"Input Image\n{sample_img}", fontsize=14)
-                axes[0].axis('off')
+                axes[0].imshow(img_np); axes[0].set_title(f"Input Image\n{sample_img}", fontsize=14); axes[0].axis('off')
+                axes[1].imshow(pred_colored); axes[1].set_title(f"Predicted Mask ({size.capitalize()})", fontsize=14); axes[1].axis('off')
+                axes[2].imshow(img_np); axes[2].imshow(rgba_pred); axes[2].set_title(f"Overlay Mask ({display_name})", fontsize=14, fontweight='bold'); axes[2].axis('off')
 
-                axes[1].imshow(pred_colored)
-                axes[1].set_title(f"Predicted Mask ({size.capitalize()})", fontsize=14)
-                axes[1].axis('off')
-
-                axes[2].imshow(img_np)
-                axes[2].imshow(rgba_pred)
-                axes[2].set_title(f"Overlay Mask ({display_name})", fontsize=14, fontweight='bold')
-                axes[2].axis('off')
-
-                # Legend with cover percentages
+            
                 present_classes = np.unique(pred)
-                legend_patches = [
-                    mpatches.Patch(color=self.config.color_palette[c], label=f"{self.id_to_class.get(c, f'Class {c}')} ({spread_pct[c]:.1f}%)")
-                    for c in present_classes
-                ]
-                fig.legend(handles=legend_patches, loc='lower center', ncol=6, bbox_to_anchor=(0.5, 0.02), fontsize=14)
-                plt.tight_layout(rect=[0, 0.08, 1, 1]) 
+                legend_patches = []
+                for c in present_classes:
+                    raw_name = self.id_to_class.get(c, f"Class {c}").replace('_', ' ')
+                    clean_name = textwrap.fill(raw_name, width=25)
+                    label_str = f"{clean_name}\n({spread_pct[c]:.2f}%)"
+                    legend_patches.append(mpatches.Patch(color=self.config.color_palette[c], label=label_str))
+
+                fig.legend(handles=legend_patches, loc='lower center', ncol=3, bbox_to_anchor=(0.5, 0.0), fontsize=14)
+                plt.tight_layout(rect=[0, 0.12, 1, 1]) 
                 
-                plt.savefig(out_dir / f"generate_{base_name}_{display_name}_{size}.png", dpi=self.config.dpi)
+                plt.savefig(out_dir / f"generate_{base_name}_{display_name}_{size}.png", dpi=self.config.dpi, bbox_inches='tight')
                 fig.clf()
                 plt.close(fig)
-
+                
     @staticmethod
     def _clean_memory():
         gc.collect()
