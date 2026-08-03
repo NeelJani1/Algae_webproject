@@ -1,4 +1,9 @@
+
+
 # SeaDino-Seg-1: Benthic Algae Segmentation Pipeline
+
+[![GitHub](https://img.shields.io/badge/GitHub-Repository-blue?logo=github)](https://github.com/NeelJani1/Algae_webproject)
+[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Model%20Weights-yellow?logo=huggingface)](https://huggingface.co/Neel536/Algea_Segmentation_Model)
 
 An evaluation pipeline for DINOv3-based benthic segmentation models. 
 Supports multiple spatial decoder sizes (tiny, small, medium, big), dynamic resolution, automated Hugging Face weight retrieval, and percent-cover metrics across surveys.
@@ -38,40 +43,54 @@ conda activate seadino_env
 Run the pipeline using `evaluate.py`. The script automatically retrieves the necessary backbone and probe weights from the Hugging Face registry [Neel536/Algea_Segmentation_Model](https://huggingface.co/Neel536/Algea_Segmentation_Model).
 
 ### 1. Side-by-Side Comparison (2x2 Grid)
+
 Generates a grid displaying the Input Image, Ground Truth Pseudo-Mask (if available), Fine-Tuned (`SeaDino-Seg-1-Fg`) prediction, and Baseline (`SeaDino-Seg-1-Org`) prediction.
+
 ```bash
 python evaluate.py --run_base --run_ft --sizes small --mode compare
 ```
 
 ### 2. Class Confidence Heatmaps (2x4 Grid)
+
 Generates confidence heatmaps for all 6 benthic classes individually.
+
 ```bash
 python evaluate.py --run_base --run_ft --sizes small --mode heatmaps
 ```
 
 ### 3. Generate Everything
+
 Runs both comparison and heatmap visualizations simultaneously.
+
 ```bash
 python evaluate.py --run_base --run_ft --sizes small --mode all
+```
+
+### 4. Web UI Export (Optimized for Frontend Integration)
+
+Generates raw original images, pure transparent PNG overlays (perfect for web opacity sliders), and a single master `outputs.json` manifest. The JSON includes an auto-generated UI color legend and embeds percent-cover metrics grouped by image to minimize network requests.
+
+```bash
+python evaluate.py --run_base --run_ft --sizes small --mode web_ui --web_out_dir web_ui_outputs
 ```
 
 ---
 
 ## ⚙️ Advanced Command-Line Flags
 
-*   `--sizes`: Select probe sizes to evaluate (`tiny`, `small`, `medium`, `big`). You can run multiple sizes sequentially:
-    ```bash
-    python evaluate.py --run_ft --sizes tiny small
-    ```
-*   `--eval_w` and `--eval_h`: Change the image evaluation resolution (must be divisible by 16):
-    ```bash
-    python evaluate.py --run_ft --sizes small --eval_w 1280 --eval_h 720
-    ```
-*   `--dpi`: Set image export quality. Lower values speed up file writing (recommended range: 100 to 600):
-    ```bash
-    python evaluate.py --run_ft --sizes small --dpi 100
-    ```
-*   `--num_imgs`: Limit the number of images processed from your raw folder (default is 20).
+* `--sizes`: Select probe sizes to evaluate (`tiny`, `small`, `medium`, `big`). You can run multiple sizes sequentially:
+  ```bash
+  python evaluate.py --run_ft --sizes tiny small
+  ```
+* `--eval_w` and `--eval_h`: Change the image evaluation resolution (must be divisible by 16):
+  ```bash
+  python evaluate.py --run_ft --sizes small --eval_w 1280 --eval_h 720
+  ```
+* `--dpi`: Set image export quality. Lower values speed up file writing (recommended range: 100 to 600):
+  ```bash
+  python evaluate.py --run_ft --sizes small --dpi 100
+  ```
+* `--num_imgs`: Limit the number of images processed from your raw folder (default is 20).
 
 ---
 
@@ -83,6 +102,6 @@ The pipeline automatically calculates and logs the **Spread % (Percent Cover)** 
 
 ## 📝 License & Credits
 
-*   **Model Backbone:** [facebook/dinov3-vits16-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m)
-*   **Pipeline Development:** Neel / SeaDino-seg-1
-*   **License:** MIT License
+* **Model Backbone:** [facebook/dinov3-vits16-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m)
+* **Hugging Face Weights:** [Neel536/Algea_Segmentation_Model](https://huggingface.co/Neel536/Algea_Segmentation_Model)
+* **License:** MIT License
