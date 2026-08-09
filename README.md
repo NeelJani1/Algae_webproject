@@ -14,9 +14,10 @@ Supports multiple spatial decoder sizes (tiny, small, medium, big), dynamic reso
 
 ```text
 SeaDino_Project/
+├── .env.example       # Environment template for secure Hugging Face token
 ├── config.py          # Static settings (DPI, color palette, resolutions)
 ├── models.py          # Neural Network definitions (Tiny to Big heads)
-├── utils.py           # Helper functions (Hugging Face Hub downloader)
+├── utils.py           # Helper functions (Secure Hugging Face Hub downloader)
 ├── pipeline.py        # Core processing engine (Inference, visualization, statistics)
 ├── evaluate.py        # CLI Entrypoint (The only script you run)
 ├── environment.yml    # Anaconda environment specification (Python 3.13)
@@ -30,19 +31,40 @@ SeaDino_Project/
 
 Ensure you have Anaconda or Miniconda installed, then set up the environment:
 
+**1. Create and activate the conda environment:**
 ```bash
-# 1. Create and activate the conda environment
 conda env create -f environment.yml
 conda activate seadino_env
+pip install -r requirements.txt
 ```
+
+**2. Configure Secure Hugging Face Access (Required):**
+The model weights are hosted in a private Hugging Face repository. To allow the script to download them securely:
+* Rename `.env.example` to `.env`
+* Open the `.env` file and replace the placeholder with your Hugging Face Access Token:
+  ```text
+  HF_TOKEN=hf_YourCopiedTokenHere
+  ```
 
 ---
 
 ## 📊 How to Run Evaluations
 
-Run the pipeline using `evaluate.py`. The script automatically retrieves the necessary backbone and probe weights from the Hugging Face registry [Neel536/Algea_Segmentation_Model](https://huggingface.co/Neel536/Algea_Segmentation_Model).
+Run the pipeline using `evaluate.py`. The script automatically retrieves the necessary backbone and probe weights securely using your `.env` configuration.
 
-### 1. Side-by-Side Comparison (2x2 Grid)
+### 1. Web UI Export (Optimized for Frontend Integration)
+
+Generates a production-ready, highly organized export designed for web servers and interactive dashboards.
+* **Organized Architecture:** Saves assets cleanly into `/images` and `/masks` subfolders.
+* **Pixel-Perfect Alignment:** Masks are dynamically rescaled to match the exact original aspect ratio of the raw uploaded images (e.g., 1920x1080).
+* **Interactive Layers:** Generates a combined transparent overlay, as well as **isolated transparent layers for each individual class** (perfect for web UI checkboxes/toggles).
+* **Robust Error Handling:** Safely intercepts unsupported files (like PDFs) or corrupt images and logs them as errors in the JSON without crashing the pipeline.
+
+```bash
+python evaluate.py --run_ft --sizes small --mode web_ui --web_out_dir web_ui_outputs
+```
+
+### 2. Side-by-Side Comparison (2x2 Grid)
 
 Generates a grid displaying the Input Image, Ground Truth Pseudo-Mask (if available), Fine-Tuned (`SeaDino-Seg-1-Fg`) prediction, and Baseline (`SeaDino-Seg-1-Org`) prediction.
 
@@ -50,7 +72,7 @@ Generates a grid displaying the Input Image, Ground Truth Pseudo-Mask (if availa
 python evaluate.py --run_base --run_ft --sizes small --mode compare
 ```
 
-### 2. Class Confidence Heatmaps (2x4 Grid)
+### 3. Class Confidence Heatmaps (2x4 Grid)
 
 Generates confidence heatmaps for all 6 benthic classes individually.
 
@@ -58,20 +80,12 @@ Generates confidence heatmaps for all 6 benthic classes individually.
 python evaluate.py --run_base --run_ft --sizes small --mode heatmaps
 ```
 
-### 3. Generate Everything
+### 4. Generate Everything
 
 Runs both comparison and heatmap visualizations simultaneously.
 
 ```bash
 python evaluate.py --run_base --run_ft --sizes small --mode all
-```
-
-### 4. Web UI Export (Optimized for Frontend Integration)
-
-Generates raw original images, pure transparent PNG overlays (perfect for web opacity sliders), and a single master `outputs.json` manifest. The JSON includes an auto-generated UI color legend and embeds percent-cover metrics grouped by image to minimize network requests.
-
-```bash
-python evaluate.py --run_base --run_ft --sizes small --mode web_ui --web_out_dir web_ui_outputs
 ```
 
 ---
@@ -103,5 +117,6 @@ The pipeline automatically calculates and logs the **Spread % (Percent Cover)** 
 ## 📝 License & Credits
 
 * **Model Backbone:** [facebook/dinov3-vits16-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m)
+* **Pipeline Development:** [Neel Jani](https://github.com/NeelJani1/Algae_webproject) / SeaDino-Seg-1
 * **Hugging Face Weights:** [Neel536/Algea_Segmentation_Model](https://huggingface.co/Neel536/Algea_Segmentation_Model)
 * **License:** MIT License

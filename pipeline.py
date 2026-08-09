@@ -34,10 +34,8 @@ class SeaDinoPipeline:
         self.class_map, self.id_to_class, self.num_classes = self._load_class_map()
         self.active_models = self._initialize_models()
         
-        # Web UI dictionary to group by image
         self.web_manifest_dict = {}
 
-        # Global Trackers for Total Coverage
         self.total_metrics = {
             size: {
                 bb_type: {"counts": np.zeros(self.num_classes, dtype=np.int64), "pixels": 0} 
@@ -119,6 +117,8 @@ class SeaDinoPipeline:
         if not self.active_models:
             logger.error("No valid probes found to run. Exiting.")
             return
+            
+        valid_extensions = ('.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG')
 
         # Single Image Override
         if getattr(self.args, 'image', None):
@@ -129,8 +129,19 @@ class SeaDinoPipeline:
             
             sample_img = os.path.basename(img_path)
             logger.info(f"Processing single image: {sample_img}")
-            self._process_single_image(sample_img, img_path, 1, 1)
             
+            # NEW: Check file format for single image
+            if not sample_img.endswith(valid_extensions):
+                error_msg = f"Unsupported file format. Please upload JPG or PNG."
+                logger.error(f"{sample_img} - {error_msg}")
+                self._log_error_to_manifest(sample_img, error_msg)
+            else:
+                try:
+                    self._process_single_image(sample_img, img_path, 1, 1)
+                except Exception as e:
+                    logger.error(f"Failed to process {sample_img}: {e}")
+                    self._log_error_to_manifest(sample_img, str(e))
+                
         # Standard Folder Loop
         else:
             potential_raw_dir = os.path.join(self.args.base_dir, "raw_images")
@@ -140,36 +151,54 @@ class SeaDinoPipeline:
                 img_dir = self.args.base_dir
 
             if not os.path.exists(img_dir):
-                logger.error(f"Directory {img_dir} does not exist.")
+                logger.error(f"Path {img_dir} does not exist.")
                 return
                 
-            image_files = sorted([f for f in os.listdir(img_dir) if f.endswith(('.jpg', '.png', '.jpeg'))])
+            # THE FIX: If the user accidentally passes a file to --base_dir instead of a folder
+            if not os.path.isdir(img_dir):
+                logger.warning(f"Passed a file to --base_dir instead of a folder. Routing to single file logic.")
+                all_files = [os.path.basename(img_dir)]
+                img_dir = os.path.dirname(img_dir) # Temporarily treat the parent folder as the directory
+            else:
+                # Grab ALL files (Don't silently ignore them anymore)
+                all_files = sorted([f for f in os.listdir(img_dir) if os.path.isfile(os.path.join(img_dir, f))])
             
-            if len(image_files) == 0:
-                logger.error(f"No images (.jpg, .png) found in {img_dir}")
+            if len(all_files) == 0:
+                logger.error(f"No files found in {img_dir}")
                 return
 
-            num_images = min(self.args.num_imgs, len(image_files))
+            num_images = min(self.args.num_imgs, len(all_files))
 
             for i in range(num_images):
-                img_path = os.path.join(img_dir, image_files[i])
-                self._process_single_image(image_files[i], img_path, i + 1, num_images)
+                sample_img = all_files[i]
+                img_path = os.path.join(img_dir, sample_img)
+                
+                # NEW: Check file format during the batch loop
+                if not sample_img.endswith(valid_extensions):
+                    error_msg = f"Unsupported file format. Please upload JPG , JPEG or PNG."
+                    logger.warning(f"Skipping {sample_img} - {error_msg}")
+                    self._log_error_to_manifest(sample_img, error_msg)
+                    continue # Skip to the next file
+                    
+                try:
+                    self._process_single_image(sample_img, img_path, i + 1, num_images)
+                except Exception as e:
+                    logger.error(f"Failed to process {sample_img}: {e}")
+                    self._log_error_to_manifest(sample_img, str(e))
                 
             self._generate_final_summary(num_images)
 
-        # Dump Highly Master Manifest of json
+        # Generate JSON Manifest
         if getattr(self.args, 'mode', 'all') in ['web_ui', 'all']:
             web_out_dir = Path(getattr(self.args, 'web_out_dir', 'web_ui_outputs'))
             web_out_dir.mkdir(parents=True, exist_ok=True)
             
-            # --- Convert Numpy Palette to Web Hex Colors ---
             ui_legend = {}
             for c in range(self.num_classes):
                 class_name = self.id_to_class.get(c, f"Class {c}")
                 r, g, b = (self.config.color_palette[c] * 255).astype(int)
                 ui_legend[class_name] = f"#{r:02x}{g:02x}{b:02x}"
             
-            # --- Structure the final JSON using grouped logic ---
             final_web_payload = {
                 "ui_legend": ui_legend,
                 "survey_results": list(self.web_manifest_dict.values())
@@ -182,19 +211,33 @@ class SeaDinoPipeline:
 
         logger.info("SeaDino evaluation pipeline finished successfully!")
 
+    # UPDATED: Matches the new /images/ subfolder structure
+    def _log_error_to_manifest(self, sample_img: str, error_msg: str):
+        if getattr(self.args, 'mode', 'all') not in ['web_ui', 'all']: return
+        web_out_dir = Path(getattr(self.args, 'web_out_dir', 'web_ui_outputs'))
+        folder_name = web_out_dir.name
+        
+        self.web_manifest_dict[sample_img] = {
+            "input": f"{folder_name}/images/{sample_img}",
+            "status": "error",
+            "error_message": error_msg
+        }
+
     def _process_single_image(self, sample_img: str, img_path: str, current_idx: int, total_imgs: int):
         base_name = os.path.splitext(sample_img)[0]
-        
-        # Safely determine mask path
         mask_path = os.path.join(self.args.masks_dir, base_name + '.png') if getattr(self.args, 'masks_dir', None) else ""
 
-        img_pil = TF.resize(Image.open(img_path).convert("RGB"), [self.config.eval_h, self.config.eval_w], interpolation=TF.InterpolationMode.BILINEAR)
-        img_np = np.array(img_pil)
+        # FIX: Capture the ORIGINAL dimensions of the image
+        orig_pil = Image.open(img_path).convert("RGB")
+        orig_w, orig_h = orig_pil.size
+        img_np = np.array(orig_pil) # Use the original size for plotting later
+
+        # Resize for the DINO backbone to work properly
+        img_pil = TF.resize(orig_pil, [self.config.eval_h, self.config.eval_w], interpolation=TF.InterpolationMode.BILINEAR)
         img_input = TF.normalize(TF.to_tensor(img_pil), mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)).unsqueeze(0).to(self.config.device)
 
         results = {size: {} for size in self.args.sizes}
 
-        # --- INFERENCE & SPREAD % CALCULATION ---
         for bb_type, bb_data in self.active_models.items():
             backbone = bb_data['backbone']
             with torch.no_grad():
@@ -206,22 +249,21 @@ class SeaDinoPipeline:
                 
                 for probe_info in bb_data['probes']:
                     size = probe_info["size"]
-                    logits = probe_info["model"](features, (self.config.eval_h, self.config.eval_w)) 
+                    
+                    # FIX: resize mask directly back to ORIGINAL aspect ratio
+                    logits = probe_info["model"](features, (orig_h, orig_w)) 
                     probs = F.softmax(logits, dim=1).squeeze(0).cpu().numpy() 
-                    prediction = np.argmax(probs, axis=0)
+                    prediction = np.argmax(probs, axis=0) # Mask is now exactly orig_h x orig_w!
 
-                    # PER-IMAGE PERCENT COVER
                     counts = np.bincount(prediction.flatten(), minlength=self.num_classes)
                     spread_pct = (counts / prediction.size) * 100
                     
-                    # UPDATE GLOBAL TOTALS
                     self.total_metrics[size][bb_type]["counts"] += counts
                     self.total_metrics[size][bb_type]["pixels"] += prediction.size
                     
-                    # Print Image Report
                     display_name = bb_data['display_name']
                     size_name = probe_info["name"]
-                    print(f"\n📊 SPREAD % [{display_name} | {size_name}] FOR: {sample_img}")
+                    print(f"\n📊 SPREAD % [{display_name} | {size_name}] FOR: {sample_img} (Size: {orig_w}x{orig_h})")
                     print("-" * 50)
                     for c in range(self.num_classes):
                         if spread_pct[c] > 0:
@@ -234,15 +276,14 @@ class SeaDinoPipeline:
             del out, patches, features
             self._clean_memory()
 
-        # --- VISUALIZATION SETUP (Load GT Mask once per image) ---
         gt_colored = None
         gt_mask = None 
         if os.path.exists(mask_path):
-            mask_tensor = TF.resize(Image.open(mask_path).convert("L"), [self.config.eval_h, self.config.eval_w], interpolation=TF.InterpolationMode.NEAREST)
+            # FIX: Match GT mask resizing to original dimensions
+            mask_tensor = TF.resize(Image.open(mask_path).convert("L"), [orig_h, orig_w], interpolation=TF.InterpolationMode.NEAREST)
             gt_mask = np.array(mask_tensor)
             gt_colored = self.config.color_palette[np.where(gt_mask < len(self.config.color_palette), gt_mask, 0)]
 
-        # --- VISUALIZATION DISPATCH ---
         if self.args.mode in ['heatmaps', 'all']:
             self._plot_heatmaps(sample_img, base_name, img_np, results)
             
@@ -258,18 +299,23 @@ class SeaDinoPipeline:
         if self.args.mode in ['generate', 'all']:
             self._plot_generate(sample_img, base_name, img_np, results)
             
-        # Web UI Asset Exporter Dispatch
         if self.args.mode in ['web_ui', 'all']:
             self._export_web_ui(sample_img, base_name, img_np, results)
 
-    # Web UI Assets Generation Function
+    # UPDATED: Web UI Assets Generation Function (Structured Folders)
     def _export_web_ui(self, sample_img: str, base_name: str, img_np: np.ndarray, results: dict):
         web_out_dir = Path(getattr(self.args, 'web_out_dir', 'web_ui_outputs'))
-        web_out_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 1. Create clean sub-folders for images and masks
+        images_dir = web_out_dir / "images"
+        masks_dir = web_out_dir / "masks"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        masks_dir.mkdir(parents=True, exist_ok=True)
+        
         folder_name = web_out_dir.name
         
-        # 1. Copy the raw input image to the web folder
-        web_input_path = web_out_dir / sample_img
+        # 2. Save the raw input image into the /images/ folder
+        web_input_path = images_dir / sample_img
         original_img_path = os.path.join(self.args.base_dir, sample_img)
         potential_raw_dir = os.path.join(self.args.base_dir, "raw_images")
         if os.path.isdir(potential_raw_dir):
@@ -278,10 +324,11 @@ class SeaDinoPipeline:
         if not web_input_path.exists() and os.path.exists(original_img_path):
             shutil.copy(original_img_path, web_input_path)
 
-        # 2. Group by image in the manifest dictionary
+        # 3. Add status success tag and point to the /images/ folder
         if sample_img not in self.web_manifest_dict:
             self.web_manifest_dict[sample_img] = {
-                "input": f"{folder_name}/{sample_img}",
+                "input": f"{folder_name}/images/{sample_img}",
+                "status": "success",
                 "predictions": {}
             }
 
@@ -291,25 +338,48 @@ class SeaDinoPipeline:
                 pred = res["pred"]
                 spread_pct = res["spread_pct"]
                 
-                # 3. Create a PURE TRANSPARENT MASK
+                # 1. Create the COMBINED transparent mask (what we already had)
                 pred_rgb = (self.config.color_palette[pred] * 255).astype(np.uint8)
                 alpha = np.where(pred == 0, 0, 153).astype(np.uint8)
+                combined_mask_pil = Image.fromarray(np.dstack((pred_rgb, alpha)), "RGBA")
+                combined_mask_name = f"overlay_{base_name}_{bb_type}-{size}_ALL.png"
+                combined_mask_pil.save(masks_dir / combined_mask_name, format="PNG")
                 
-                mask_pil = Image.fromarray(np.dstack((pred_rgb, alpha)), "RGBA")
-                mask_name = f"overlay_{base_name}_{bb_type}-{size}.png"
-                mask_path = web_out_dir / mask_name
-                mask_pil.save(mask_path, format="PNG")
-                
-                # 4. Extract nicely rounded spread calculations
+                # NEW: Create INDIVIDUAL masks for each class & gather stats
                 spread_data = {}
+                individual_masks = {} # Store paths for hosts's checkboxes
+                
                 for c in range(self.num_classes):
                     class_name = self.id_to_class.get(c, f"Class {c}")
                     spread_data[class_name] = round(float(spread_pct[c]), 2)
+                    
+                    # Only create a mask if this class actually appears in the image!
+                    # (And we usually skip 'background' since it's not useful to toggle on/off)
+                    if spread_pct[c] > 0 and "background" not in class_name.lower():
+                        # Find only the pixels for this specific class
+                        class_pixels = (pred == c)
+                        
+                        # Create an empty, fully transparent image
+                        rgba_img = np.zeros((pred.shape[0], pred.shape[1], 4), dtype=np.uint8)
+                        
+                        # Fill ONLY this class's pixels with its specific color
+                        color = (self.config.color_palette[c] * 255).astype(np.uint8)
+                        rgba_img[class_pixels, :3] = color
+                        rgba_img[class_pixels, 3] = 153 # 60% Opacity
+                        
+                        class_mask_pil = Image.fromarray(rgba_img, "RGBA")
+                        safe_class_name = class_name.replace(" ", "_") # Web safe names
+                        class_mask_name = f"layer_{base_name}_{bb_type}-{size}_{safe_class_name}.png"
+                        class_mask_pil.save(masks_dir / class_mask_name, format="PNG")
+                        
+                        # Add it to the dictionary
+                        individual_masks[class_name] = f"{folder_name}/masks/{class_mask_name}"
                 
-                # 5. Populate the prediction dictionary (No Arrays to loop over!)
+                # 3. Update the JSON schema to include the new layers!
                 prediction_key = f"{display_name}-{size}"
                 self.web_manifest_dict[sample_img]["predictions"][prediction_key] = {
-                    "overlay_mask": f"{folder_name}/{mask_name}",
+                    "overlay_mask_combined": f"{folder_name}/masks/{combined_mask_name}",
+                    "overlay_mask_layers": individual_masks,  # Host uses this for checkboxes!
                     "coverage": spread_data
                 }
 
