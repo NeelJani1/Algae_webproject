@@ -202,12 +202,12 @@ class SeaDinoPipeline:
             manifest_path = web_out_dir / "outputs.json"
             with open(manifest_path, 'w') as f:
                 json.dump(final_web_payload, f, indent=4)
-            logger.info(f"✅ Web UI Master Manifest saved to: {manifest_path}")
+            logger.info(f" Web UI Master Manifest saved to: {manifest_path}")
 
             # NEW: Generate CSV coverage table
             csv_path = web_out_dir / "coverage.csv"
             self._generate_csv(csv_path)
-            logger.info(f"✅ CSV Coverage Table saved to: {csv_path}")
+            logger.info(f"CSV Coverage Table saved to: {csv_path}")
 
         logger.info("SeaDino evaluation pipeline finished successfully!")
 
@@ -368,41 +368,56 @@ class SeaDinoPipeline:
                 combined_mask_name = f"overlay_{base_name}_{bb_type}-{size}_ALL.png"
                 combined_mask_pil.save(masks_dir / combined_mask_name, format="PNG")
                 
+                # CLEAN DICTIONARY SETUP
                 spread_data = {}
                 individual_masks = {}
-                confidence_maps = {} # NEW: Track confidence maps
+                confidence_maps = {} 
+                
+                # Check if for extra files
+                export_extras = getattr(self.args, 'web_export_extras', False)
                 
                 for c in range(self.num_classes):
                     class_name = self.id_to_class.get(c, f"Class {c}")
                     spread_data[class_name] = round(float(spread_pct[c]), 2)
                     
                     if spread_pct[c] > 0 and "background" not in class_name.lower():
-                        class_pixels = (pred == c)
-                        rgba_img = np.zeros((pred.shape[0], pred.shape[1], 4), dtype=np.uint8)
-                        color = (self.config.color_palette[c] * 255).astype(np.uint8)
-                        rgba_img[class_pixels, :3] = color
-                        rgba_img[class_pixels, 3] = 153 
-                        
-                        class_mask_pil = Image.fromarray(rgba_img, "RGBA")
                         safe_class_name = class_name.replace(" ", "_")
-                        class_mask_name = f"layer_{base_name}_{bb_type}-{size}_{safe_class_name}.png"
-                        class_mask_pil.save(masks_dir / class_mask_name, format="PNG")
-                        individual_masks[class_name] = f"{folder_name}/masks/{class_mask_name}"
                         
-                        # NEW: Generate Hover Confidence Map (Grayscale: 0-255)
-                        conf_img = (probs[c] * 255).astype(np.uint8)
-                        conf_pil = Image.fromarray(conf_img, "L") 
-                        conf_name = f"conf_{base_name}_{bb_type}-{size}_{safe_class_name}.png"
-                        conf_pil.save(conf_dir / conf_name, format="PNG")
-                        confidence_maps[class_name] = f"{folder_name}/confidence/{conf_name}"
+                        # ONLY save these extra files if the flag is True!
+                        if export_extras:
+                            # 1. Save Individual Class Mask
+                            class_pixels = (pred == c)
+                            rgba_img = np.zeros((pred.shape[0], pred.shape[1], 4), dtype=np.uint8)
+                            color = (self.config.color_palette[c] * 255).astype(np.uint8)
+                            rgba_img[class_pixels, :3] = color
+                            rgba_img[class_pixels, 3] = 153 
+                            
+                            class_mask_pil = Image.fromarray(rgba_img, "RGBA")
+                            class_mask_name = f"layer_{base_name}_{bb_type}-{size}_{safe_class_name}.png"
+                            class_mask_pil.save(masks_dir / class_mask_name, format="PNG")
+                            individual_masks[class_name] = f"{folder_name}/masks/{class_mask_name}"
+                            
+                            # 2. Save Hover Confidence Map
+                            conf_img = (probs[c] * 255).astype(np.uint8)
+                            conf_pil = Image.fromarray(conf_img, "L") 
+                            conf_name = f"conf_{base_name}_{bb_type}-{size}_{safe_class_name}.png"
+                            conf_pil.save(conf_dir / conf_name, format="PNG")
+                            confidence_maps[class_name] = f"{folder_name}/confidence/{conf_name}"
                 
                 prediction_key = f"{display_name}-{size}"
-                self.web_manifest_dict[sample_img]["predictions"][prediction_key] = {
+                
+                # Dynamically build the JSON payload
+                pred_payload = {
                     "overlay_mask_combined": f"{folder_name}/masks/{combined_mask_name}",
-                    "overlay_mask_layers": individual_masks,
-                    "confidence_maps": confidence_maps, # Sent directly to the JSON!
                     "coverage": spread_data
                 }
+                
+                # Only add the extra dictionaries to JSON if they actually exist
+                if export_extras:
+                    pred_payload["overlay_mask_layers"] = individual_masks
+                    pred_payload["confidence_maps"] = confidence_maps
+                    
+                self.web_manifest_dict[sample_img]["predictions"][prediction_key] = pred_payload
 
     def _generate_final_summary(self, total_images: int):
         print("\n" + "="*65)
