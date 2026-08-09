@@ -11,14 +11,30 @@ def parse_args():
     parser.add_argument('--mode', type=str, 
                         choices=['heatmaps', 'compare', 'compare_single', 'generate', 'all', 'web_ui'], 
                         default='all')
+
+    # NEW: Flag to include Matplotlib reports in the web export
+    parser.add_argument('--web_include_report', action='store_true', 
+                            help="Save Matplotlib comparison grids inside the web_ui folder.")
     parser.add_argument('--web_out_dir', type=str, default="web_ui_outputs", 
                         help="Directory to save raw overlay masks and JSON manifests for the Web UI.")
     parser.add_argument('--web_export_extras', action='store_true', 
                         help="Export individual class masks and confidence heatmaps for advanced UI features.")
+    parser.add_argument('--web_report_type', type=str, nargs='+', 
+                        choices=['compare', 'compare_single', 'generate', 'heatmaps', 'all'], 
+                        default=['generate'], 
+                        help="Which Matplotlib report(s) to include in the web export.")
+    parser.add_argument('--web_target_classes', type=str, nargs='+', default=None,
+                        help="Specific class names to export individual masks and confidence maps for "
+                        "(e.g. 'Rock_Deepwatercove' 'Ecklonia_Deepwatercove'). If None, exports all detected classes.")
+
+    # NEW: Independent sizes for Base vs Fine-Tuned models
+
+    parser.add_argument('--base_sizes', type=str, nargs='+', choices=['tiny', 'small', 'medium', 'big'], default=None,
+                        help="Probe sizes specifically for Original Baseline model (overrides --sizes).")
+    parser.add_argument('--ft_sizes', type=str, nargs='+', choices=['tiny', 'small', 'medium', 'big'], default=None,
+                        help="Probe sizes specifically for Fine-Tuned model (overrides --sizes).")
     
-    # NEW: Flag to include Matplotlib reports in the web export
-    parser.add_argument('--web_include_report', action='store_true', 
-                        help="Save Matplotlib comparison grids inside the web_ui folder.")
+    
     
     parser.add_argument('--hf_repo', type=str, default="Neel536/Algea_Segmentation_Model")
     parser.add_argument('--sizes', type=str, nargs='+', choices=['tiny', 'small', 'medium', 'big'], default=['small'])
