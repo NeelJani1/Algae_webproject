@@ -1,9 +1,8 @@
 # SeaDino-Seg-1: Benthic Algae Segmentation Pipeline
 
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-blue?logo=github)](https://github.com/NeelJani1/Algae_webproject)
-[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Model%20Weights-yellow?logo=huggingface)](https://huggingface.co/Neel536/Algea_Segmentation_Model)
 
-An evaluation pipeline for DINOv3-based benthic segmentation models. 
+Pipeline for DINOv3-based benthic segmentation models. 
 Supports multiple spatial decoder sizes (tiny, small, medium, big), dynamic resolution, automated Hugging Face weight retrieval, and percent-cover metrics across surveys.
 
 ---
@@ -141,5 +140,4 @@ The pipeline automatically calculates and logs the **Spread % (Percent Cover)** 
 
 * **Model Backbone:** [facebook/dinov3-vits16-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m)
 * **Pipeline Development:** [Neel Jani](https://github.com/NeelJani1/Algae_webproject) / SeaDino-Seg-1
-* **Hugging Face Weights:** [Neel536/Algea_Segmentation_Model](https://huggingface.co/Neel536/Algea_Segmentation_Model)
 * **License:** MIT License
