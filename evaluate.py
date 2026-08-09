@@ -14,6 +14,10 @@ def parse_args():
     parser.add_argument('--web_out_dir', type=str, default="web_ui_outputs", 
                         help="Directory to save raw overlay masks and JSON manifests for the Web UI.")
     
+    # NEW: Flag to include Matplotlib reports in the web export
+    parser.add_argument('--web_include_report', action='store_true', 
+                        help="Save Matplotlib comparison grids inside the web_ui folder.")
+    
     parser.add_argument('--hf_repo', type=str, default="Neel536/Algea_Segmentation_Model")
     parser.add_argument('--sizes', type=str, nargs='+', choices=['tiny', 'small', 'medium', 'big'], default=['small'])
     

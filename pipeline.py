@@ -1,5 +1,6 @@
 import os
 import gc
+import csv
 import json
 import logging
 import argparse
@@ -120,7 +121,6 @@ class SeaDinoPipeline:
             
         valid_extensions = ('.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG')
 
-        # Single Image Override
         if getattr(self.args, 'image', None):
             img_path = self.args.image
             if not os.path.exists(img_path):
@@ -130,7 +130,6 @@ class SeaDinoPipeline:
             sample_img = os.path.basename(img_path)
             logger.info(f"Processing single image: {sample_img}")
             
-            # NEW: Check file format for single image
             if not sample_img.endswith(valid_extensions):
                 error_msg = f"Unsupported file format. Please upload JPG or PNG."
                 logger.error(f"{sample_img} - {error_msg}")
@@ -142,7 +141,6 @@ class SeaDinoPipeline:
                     logger.error(f"Failed to process {sample_img}: {e}")
                     self._log_error_to_manifest(sample_img, str(e))
                 
-        # Standard Folder Loop
         else:
             potential_raw_dir = os.path.join(self.args.base_dir, "raw_images")
             if os.path.isdir(potential_raw_dir):
@@ -151,16 +149,14 @@ class SeaDinoPipeline:
                 img_dir = self.args.base_dir
 
             if not os.path.exists(img_dir):
-                logger.error(f"Path {img_dir} does not exist.")
+                logger.error(f"Directory {img_dir} does not exist.")
                 return
                 
-            # THE FIX: If the user accidentally passes a file to --base_dir instead of a folder
             if not os.path.isdir(img_dir):
                 logger.warning(f"Passed a file to --base_dir instead of a folder. Routing to single file logic.")
                 all_files = [os.path.basename(img_dir)]
-                img_dir = os.path.dirname(img_dir) # Temporarily treat the parent folder as the directory
+                img_dir = os.path.dirname(img_dir) 
             else:
-                # Grab ALL files (Don't silently ignore them anymore)
                 all_files = sorted([f for f in os.listdir(img_dir) if os.path.isfile(os.path.join(img_dir, f))])
             
             if len(all_files) == 0:
@@ -173,12 +169,11 @@ class SeaDinoPipeline:
                 sample_img = all_files[i]
                 img_path = os.path.join(img_dir, sample_img)
                 
-                # NEW: Check file format during the batch loop
                 if not sample_img.endswith(valid_extensions):
-                    error_msg = f"Unsupported file format. Please upload JPG , JPEG or PNG."
+                    error_msg = f"Unsupported file format. Please upload JPG or PNG."
                     logger.warning(f"Skipping {sample_img} - {error_msg}")
                     self._log_error_to_manifest(sample_img, error_msg)
-                    continue # Skip to the next file
+                    continue 
                     
                 try:
                     self._process_single_image(sample_img, img_path, i + 1, num_images)
@@ -188,7 +183,7 @@ class SeaDinoPipeline:
                 
             self._generate_final_summary(num_images)
 
-        # Generate JSON Manifest
+        # NEW: Master Exports (JSON + CSV)
         if getattr(self.args, 'mode', 'all') in ['web_ui', 'all']:
             web_out_dir = Path(getattr(self.args, 'web_out_dir', 'web_ui_outputs'))
             web_out_dir.mkdir(parents=True, exist_ok=True)
@@ -209,9 +204,34 @@ class SeaDinoPipeline:
                 json.dump(final_web_payload, f, indent=4)
             logger.info(f"✅ Web UI Master Manifest saved to: {manifest_path}")
 
+            # NEW: Generate CSV coverage table
+            csv_path = web_out_dir / "coverage.csv"
+            self._generate_csv(csv_path)
+            logger.info(f"✅ CSV Coverage Table saved to: {csv_path}")
+
         logger.info("SeaDino evaluation pipeline finished successfully!")
 
-    # UPDATED: Matches the new /images/ subfolder structure
+    # NEW: CSV Generator Function
+    def _generate_csv(self, csv_path: Path):
+        headers = ['Image', 'Status', 'Model'] + [self.id_to_class.get(c, f"Class {c}") for c in range(self.num_classes)]
+        with open(csv_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            
+            for sample_img, data in self.web_manifest_dict.items():
+                status = data.get("status", "unknown")
+                if status == "error":
+                    writer.writerow([sample_img, status, "N/A"] + [""] * self.num_classes)
+                    continue
+                    
+                for pred_key, pred_data in data.get("predictions", {}).items():
+                    coverage = pred_data.get("coverage", {})
+                    row = [sample_img, status, pred_key]
+                    for c in range(self.num_classes):
+                        cls_name = self.id_to_class.get(c, f"Class {c}")
+                        row.append(coverage.get(cls_name, 0.0))
+                    writer.writerow(row)
+
     def _log_error_to_manifest(self, sample_img: str, error_msg: str):
         if getattr(self.args, 'mode', 'all') not in ['web_ui', 'all']: return
         web_out_dir = Path(getattr(self.args, 'web_out_dir', 'web_ui_outputs'))
@@ -227,12 +247,10 @@ class SeaDinoPipeline:
         base_name = os.path.splitext(sample_img)[0]
         mask_path = os.path.join(self.args.masks_dir, base_name + '.png') if getattr(self.args, 'masks_dir', None) else ""
 
-        # FIX: Capture the ORIGINAL dimensions of the image
         orig_pil = Image.open(img_path).convert("RGB")
         orig_w, orig_h = orig_pil.size
-        img_np = np.array(orig_pil) # Use the original size for plotting later
+        img_np = np.array(orig_pil) 
 
-        # Resize for the DINO backbone to work properly
         img_pil = TF.resize(orig_pil, [self.config.eval_h, self.config.eval_w], interpolation=TF.InterpolationMode.BILINEAR)
         img_input = TF.normalize(TF.to_tensor(img_pil), mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)).unsqueeze(0).to(self.config.device)
 
@@ -250,10 +268,9 @@ class SeaDinoPipeline:
                 for probe_info in bb_data['probes']:
                     size = probe_info["size"]
                     
-                    # FIX: resize mask directly back to ORIGINAL aspect ratio
                     logits = probe_info["model"](features, (orig_h, orig_w)) 
                     probs = F.softmax(logits, dim=1).squeeze(0).cpu().numpy() 
-                    prediction = np.argmax(probs, axis=0) # Mask is now exactly orig_h x orig_w!
+                    prediction = np.argmax(probs, axis=0)
 
                     counts = np.bincount(prediction.flatten(), minlength=self.num_classes)
                     spread_pct = (counts / prediction.size) * 100
@@ -279,7 +296,6 @@ class SeaDinoPipeline:
         gt_colored = None
         gt_mask = None 
         if os.path.exists(mask_path):
-            # FIX: Match GT mask resizing to original dimensions
             mask_tensor = TF.resize(Image.open(mask_path).convert("L"), [orig_h, orig_w], interpolation=TF.InterpolationMode.NEAREST)
             gt_mask = np.array(mask_tensor)
             gt_colored = self.config.color_palette[np.where(gt_mask < len(self.config.color_palette), gt_mask, 0)]
@@ -301,20 +317,22 @@ class SeaDinoPipeline:
             
         if self.args.mode in ['web_ui', 'all']:
             self._export_web_ui(sample_img, base_name, img_np, results)
+            # NEW: Route Matplotlib report directly into Web UI folders if flag is active
+            if getattr(self.args, 'web_include_report', False):
+                reports_dir = Path(getattr(self.args, 'web_out_dir', 'web_ui_outputs')) / "reports"
+                self._plot_comparison(sample_img, base_name, img_np, gt_colored, gt_mask, results, override_out_dir=reports_dir)
 
-    # UPDATED: Web UI Assets Generation Function (Structured Folders)
     def _export_web_ui(self, sample_img: str, base_name: str, img_np: np.ndarray, results: dict):
         web_out_dir = Path(getattr(self.args, 'web_out_dir', 'web_ui_outputs'))
-        
-        # 1. Create clean sub-folders for images and masks
         images_dir = web_out_dir / "images"
         masks_dir = web_out_dir / "masks"
+        conf_dir = web_out_dir / "confidence" # NEW: Folder for Hover Confidence Maps
+        
         images_dir.mkdir(parents=True, exist_ok=True)
         masks_dir.mkdir(parents=True, exist_ok=True)
-        
+        conf_dir.mkdir(parents=True, exist_ok=True)
         folder_name = web_out_dir.name
         
-        # 2. Save the raw input image into the /images/ folder
         web_input_path = images_dir / sample_img
         original_img_path = os.path.join(self.args.base_dir, sample_img)
         potential_raw_dir = os.path.join(self.args.base_dir, "raw_images")
@@ -324,11 +342,16 @@ class SeaDinoPipeline:
         if not web_input_path.exists() and os.path.exists(original_img_path):
             shutil.copy(original_img_path, web_input_path)
 
-        # 3. Add status success tag and point to the /images/ folder
+        orig_h, orig_w = img_np.shape[:2]
+        aspect_ratio = round(orig_w / orig_h, 4)
+
         if sample_img not in self.web_manifest_dict:
             self.web_manifest_dict[sample_img] = {
                 "input": f"{folder_name}/images/{sample_img}",
                 "status": "success",
+                "original_dimensions": {"width": orig_w, "height": orig_h},
+                "rescaled_dimensions": {"width": self.config.eval_w, "height": self.config.eval_h},
+                "aspect_ratio": aspect_ratio,
                 "predictions": {}
             }
 
@@ -336,50 +359,48 @@ class SeaDinoPipeline:
             for bb_type, res in bb_results.items():
                 display_name = self.active_models[bb_type]['display_name']
                 pred = res["pred"]
+                probs = res["probs"] # Grab the raw confidence floats!
                 spread_pct = res["spread_pct"]
                 
-                # 1. Create the COMBINED transparent mask (what we already had)
                 pred_rgb = (self.config.color_palette[pred] * 255).astype(np.uint8)
                 alpha = np.where(pred == 0, 0, 153).astype(np.uint8)
                 combined_mask_pil = Image.fromarray(np.dstack((pred_rgb, alpha)), "RGBA")
                 combined_mask_name = f"overlay_{base_name}_{bb_type}-{size}_ALL.png"
                 combined_mask_pil.save(masks_dir / combined_mask_name, format="PNG")
                 
-                # NEW: Create INDIVIDUAL masks for each class & gather stats
                 spread_data = {}
-                individual_masks = {} # Store paths for hosts's checkboxes
+                individual_masks = {}
+                confidence_maps = {} # NEW: Track confidence maps
                 
                 for c in range(self.num_classes):
                     class_name = self.id_to_class.get(c, f"Class {c}")
                     spread_data[class_name] = round(float(spread_pct[c]), 2)
                     
-                    # Only create a mask if this class actually appears in the image!
-                    # (And we usually skip 'background' since it's not useful to toggle on/off)
                     if spread_pct[c] > 0 and "background" not in class_name.lower():
-                        # Find only the pixels for this specific class
                         class_pixels = (pred == c)
-                        
-                        # Create an empty, fully transparent image
                         rgba_img = np.zeros((pred.shape[0], pred.shape[1], 4), dtype=np.uint8)
-                        
-                        # Fill ONLY this class's pixels with its specific color
                         color = (self.config.color_palette[c] * 255).astype(np.uint8)
                         rgba_img[class_pixels, :3] = color
-                        rgba_img[class_pixels, 3] = 153 # 60% Opacity
+                        rgba_img[class_pixels, 3] = 153 
                         
                         class_mask_pil = Image.fromarray(rgba_img, "RGBA")
-                        safe_class_name = class_name.replace(" ", "_") # Web safe names
+                        safe_class_name = class_name.replace(" ", "_")
                         class_mask_name = f"layer_{base_name}_{bb_type}-{size}_{safe_class_name}.png"
                         class_mask_pil.save(masks_dir / class_mask_name, format="PNG")
-                        
-                        # Add it to the dictionary
                         individual_masks[class_name] = f"{folder_name}/masks/{class_mask_name}"
+                        
+                        # NEW: Generate Hover Confidence Map (Grayscale: 0-255)
+                        conf_img = (probs[c] * 255).astype(np.uint8)
+                        conf_pil = Image.fromarray(conf_img, "L") 
+                        conf_name = f"conf_{base_name}_{bb_type}-{size}_{safe_class_name}.png"
+                        conf_pil.save(conf_dir / conf_name, format="PNG")
+                        confidence_maps[class_name] = f"{folder_name}/confidence/{conf_name}"
                 
-                # 3. Update the JSON schema to include the new layers!
                 prediction_key = f"{display_name}-{size}"
                 self.web_manifest_dict[sample_img]["predictions"][prediction_key] = {
                     "overlay_mask_combined": f"{folder_name}/masks/{combined_mask_name}",
-                    "overlay_mask_layers": individual_masks,  # Host uses this for checkboxes!
+                    "overlay_mask_layers": individual_masks,
+                    "confidence_maps": confidence_maps, # Sent directly to the JSON!
                     "coverage": spread_data
                 }
 
@@ -437,7 +458,8 @@ class SeaDinoPipeline:
                 fig.clf() 
                 plt.close(fig)
 
-    def _plot_comparison(self, sample_img: str, base_name: str, img_np: np.ndarray, gt_colored: np.ndarray, gt_mask: np.ndarray, results: dict):
+    # NEW: Added override_out_dir parameter to support the Web export flag
+    def _plot_comparison(self, sample_img: str, base_name: str, img_np: np.ndarray, gt_colored: np.ndarray, gt_mask: np.ndarray, results: dict, override_out_dir: Path = None):
         rgba_gt = None
         if gt_colored is not None and gt_mask is not None:
             gt_safe = np.where(gt_mask < len(self.config.color_palette), gt_mask, 0)
@@ -447,8 +469,9 @@ class SeaDinoPipeline:
         for size, bb_results in results.items():
             if not bb_results: continue 
             
-            out_dir = Path(f"output_comparisons_{size.upper()}")
-            out_dir.mkdir(exist_ok=True)
+            # USE override_out_dir if provided!
+            out_dir = override_out_dir if override_out_dir else Path(f"output_comparisons_{size.upper()}")
+            out_dir.mkdir(parents=True, exist_ok=True)
             
             fig, axes = plt.subplots(2, 2, figsize=(24, 13))
             axes = axes.flatten()
@@ -494,7 +517,6 @@ class SeaDinoPipeline:
             plt.savefig(out_dir / f"compare_{base_name}_{size}.png", dpi=self.config.dpi, bbox_inches='tight')
             fig.clf() 
             plt.close(fig)
-
 
     def _plot_compare_single(self, sample_img: str, base_name: str, img_np: np.ndarray, gt_colored: np.ndarray, gt_mask: np.ndarray, results: dict):
         gt_safe = np.where(gt_mask < len(self.config.color_palette), gt_mask, 0)
