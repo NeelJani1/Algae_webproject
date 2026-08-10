@@ -36,7 +36,7 @@ def parse_args():
     
     
     
-    parser.add_argument('--hf_repo', type=str, default="Neel536/Algea_Segmentation_Model")
+    parser.add_argument('--hf_repo', type=str, default="SeaDinoWeb/Algea_Segmentation_Model")
     parser.add_argument('--sizes', type=str, nargs='+', choices=['tiny', 'small', 'medium', 'big'], default=['small'])
     
     parser.add_argument('--run_base', action='store_true', help="Run Original Baseline.")
