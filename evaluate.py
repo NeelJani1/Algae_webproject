@@ -51,7 +51,7 @@ def parse_args():
     parser.add_argument('--ft_probe_medium', type=str, default="SeaDino-Seg-1-Fg-Medium.pth")
     parser.add_argument('--ft_probe_big', type=str, default="SeaDino-Seg-1-Fg-Big.pth")
     
-    parser.add_argument('--base_dir', type=str, default="/home/neel/d_drive/ai_data/data/data_to_ivy/test")
+    parser.add_argument('--base_dir', type=str, default="./input", help="Directory containing images to process.")
     parser.add_argument('--masks_dir', type=str, default=None)
     parser.add_argument('--num_imgs', type=int, default=20)
     parser.add_argument('--image', type=str, default=None, help="Path to a single image file (overrides base_dir loop).")

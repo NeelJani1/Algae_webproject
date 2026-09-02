@@ -58,8 +58,18 @@ class SeaDinoPipeline:
 
     def _load_class_map(self) -> Tuple[Dict[str, int], Dict[int, str], int]:
         map_path = get_file_path(os.path.join(self.args.base_dir, "class_map.json"), self.args.hf_repo)
-        with open(map_path, 'r') as f:
-            class_map = json.load(f)
+        try:
+            with open(map_path, 'r') as f:
+                class_map = json.load(f)
+        except FileNotFoundError:
+            logger.error("❌ Critical Error: 'class_map.json' was not found in '%s' or the configured Hugging Face repo.", self.args.base_dir)
+            logger.error("Please ensure class_map.json exists before running the pipeline.")
+            raise SystemExit(1)
+        except json.JSONDecodeError as exc:
+            logger.error("❌ Critical Error: 'class_map.json' exists but is not valid JSON.")
+            logger.error(f"JSON decode error: {exc}")
+            raise SystemExit(1)
+
         num_classes = max(class_map.values()) + 1
         id_to_class = {v: k for k, v in class_map.items()}
         return class_map, id_to_class, num_classes
