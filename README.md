@@ -50,7 +50,7 @@ The fine-tuned model weights are hosted in a private Hugging Face repository. To
 
 ## 💻 How to Run Evaluations
 
-Place your target images into your input directory, then run the pipeline using `evaluate.py`. The script will automatically fetch necessary backbone and probe weights securely using your `.env` configuration.
+Place your target images into a directory such as `./input`, or pass a custom `--base_dir` to the CLI. The script will automatically fetch necessary backbone and probe weights securely using your `.env` configuration.
 
 ### 1. Web UI Export (Optimized for Frontend Integration)
 
@@ -64,19 +64,19 @@ Generates a production-ready, highly organized export designed for web servers a
 
 **Example: Run the basic fast Web UI export:**
 ```bash
-python evaluate.py --run_ft --sizes small --mode web_ui --web_out_dir web_ui_outputs
+python evaluate.py --run_ft --sizes small --mode web_ui --base_dir ./input --web_out_dir web_ui_outputs
 ```
 
-**Example: Advanced Run (Export extras only for Ecklonia, and generate reports):**
+**Example: Advanced Run (Export extras only for Rock and Ecklonia, and generate reports):**
 ```bash
-python evaluate.py --run_ft --sizes small --mode web_ui --web_export_extras --web_target_classes "Ecklonia_Deepwatercove" --web_include_report --web_report_type generate heatmaps
+python evaluate.py --run_ft --sizes small --mode web_ui --base_dir ./input --web_export_extras --web_target_classes "Rock_Deepwatercove" "Ecklonia_Deepwatercove" --web_include_report --web_report_type generate heatmaps
 ```
 
 ---
 
 ### 2. Side-by-Side Comparison (2x2 Grid)
 
-Generates a comparison grid dynamically pairing and displaying **any two** predictions side-by-side (e.g., comparing model sizes like `Fg (Tiny)` vs `Fg (Small)` or architectures like `Baseline (Org)` vs `Fine-Tuned (Fg)`).
+Generates a comparison grid dynamically pairing and displaying **any two** predictions side-by-side. The visible frontend labels in the exported manifest are simplified to `Kiwi` and `Moana` for cleaner dashboard presentation.
 
 ```bash
 python evaluate.py --run_base --run_ft --sizes small --mode compare
@@ -132,7 +132,7 @@ Fine-tune your evaluation runs using the parameters below:
 
 ## 📊 Analytics & Reporting
 
-The pipeline automatically calculates and logs the **Spread % (Percent Cover)** of each benthic class both per-image and globally across the entire batch (total survey coverage) upon completion. Bad uploads (corrupted images, PDFs) are safely intercepted and logged as errors in the JSON manifest without crashing the pipeline.
+The pipeline automatically calculates and logs the **Spread % (Percent Cover)** of each benthic class both per-image and globally across the entire batch (total survey coverage) upon completion. These global values are included in the exported web manifest at the top level as `global_survey_coverage`, which is convenient for dashboard cards and charts. Bad uploads (corrupted images, PDFs) are safely intercepted and logged as errors in the JSON manifest without crashing the pipeline.
 
 ---
 
