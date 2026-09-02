@@ -108,9 +108,9 @@ class SeaDinoPipeline:
     def _initialize_models(self) -> Dict[str, Any]:
         models = {}
         if getattr(self.args, 'run_base', False): 
-            models['org'] = {'display_name': 'SeaDino-Seg-1-Org', 'backbone': self._load_backbone(False, None), 'probes': []}
+            models['org'] = {'display_name': 'Kiwi', 'backbone': self._load_backbone(False, None), 'probes': []}
         if getattr(self.args, 'run_ft', False): 
-            models['fg'] = {'display_name': 'SeaDino-Seg-1-Fg', 'backbone': self._load_backbone(True, self.args.ft_ckpt), 'probes': []}
+            models['fg'] = {'display_name': 'Moana', 'backbone': self._load_backbone(True, self.args.ft_ckpt), 'probes': []}
 
         for bb_type in list(models.keys()):
             arg_prefix = 'base' if bb_type == 'org' else 'ft'
@@ -218,9 +218,27 @@ class SeaDinoPipeline:
                 class_name = self.id_to_class.get(c, f"Class {c}")
                 r, g, b = (self.config.color_palette[c] * 255).astype(int)
                 ui_legend[class_name] = f"#{r:02x}{g:02x}{b:02x}"
+
+            global_survey_coverage = {}
+            for size, bb_results in self.total_metrics.items():
+                for bb_type, metrics in bb_results.items():
+                    if metrics["pixels"] == 0:
+                        continue
+
+                    display_name = self.active_models[bb_type]['display_name']
+                    prediction_key = f"{display_name}-{size}"
+                    global_spread_pct = (metrics["counts"] / metrics["pixels"]) * 100
+
+                    coverage_data = {}
+                    for c in range(self.num_classes):
+                        cls_name = self.id_to_class.get(c, f"Class {c}")
+                        coverage_data[cls_name] = round(float(global_spread_pct[c]), 2)
+
+                    global_survey_coverage[prediction_key] = coverage_data
             
             final_web_payload = {
                 "ui_legend": ui_legend,
+                "global_survey_coverage": global_survey_coverage,
                 "survey_results": list(self.web_manifest_dict.values())
             }
             
