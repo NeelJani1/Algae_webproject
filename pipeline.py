@@ -62,11 +62,11 @@ class SeaDinoPipeline:
             with open(map_path, 'r') as f:
                 class_map = json.load(f)
         except FileNotFoundError:
-            logger.error("❌ Critical Error: 'class_map.json' was not found in '%s' or the configured Hugging Face repo.", self.args.base_dir)
+            logger.error("⚠️ Critical Error: 'class_map.json' was not found in '%s' or the configured Hugging Face repo.", self.args.base_dir)
             logger.error("Please ensure class_map.json exists before running the pipeline.")
             raise SystemExit(1)
         except json.JSONDecodeError as exc:
-            logger.error("❌ Critical Error: 'class_map.json' exists but is not valid JSON.")
+            logger.error("⚠️ Critical Error: 'class_map.json' exists but is not valid JSON.")
             logger.error(f"JSON decode error: {exc}")
             raise SystemExit(1)
 
