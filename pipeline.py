@@ -37,18 +37,22 @@ class SeaDinoPipeline:
         
         self.web_manifest_dict = {}
 
-        # FIX: Dynamically find all probe sizes that actually successfully loaded
         active_sizes = set()
         for bb_data in self.active_models.values():
             for probe_info in bb_data['probes']:
                 active_sizes.add(probe_info["size"])
 
-        # Global Trackers for Total Coverage (Using active_sizes instead of self.args.sizes)
         self.total_metrics = {
             size: {
                 bb_type: {"counts": np.zeros(self.num_classes, dtype=np.int64), "pixels": 0} 
                 for bb_type in self.active_models.keys()
             }
+            for size in active_sizes
+        }
+
+        # UMAP Feature Tracker
+        self.umap_data = {
+            size: {bb_type: {'features': [], 'labels': []} for bb_type in self.active_models.keys()}
             for size in active_sizes
         }
 
@@ -100,8 +104,6 @@ class SeaDinoPipeline:
 
         for bb_type in list(models.keys()):
             arg_prefix = 'base' if bb_type == 'org' else 'ft'
-            
-            # FIX: Check for per-model sizes (--base_sizes or --ft_sizes), fallback to --sizes
             model_sizes = getattr(self.args, f"{arg_prefix}_sizes", None)
             if not model_sizes:
                 model_sizes = self.args.sizes
@@ -196,7 +198,7 @@ class SeaDinoPipeline:
                 
             self._generate_final_summary(num_images)
 
-        # NEW: Master Exports (JSON + CSV)
+        # Web UI Exports
         if getattr(self.args, 'mode', 'all') in ['web_ui', 'all']:
             web_out_dir = Path(getattr(self.args, 'web_out_dir', 'web_ui_outputs'))
             web_out_dir.mkdir(parents=True, exist_ok=True)
@@ -215,16 +217,18 @@ class SeaDinoPipeline:
             manifest_path = web_out_dir / "outputs.json"
             with open(manifest_path, 'w') as f:
                 json.dump(final_web_payload, f, indent=4)
-            logger.info(f" Web UI Master Manifest saved to: {manifest_path}")
+            logger.info(f"✅ Web UI Master Manifest saved to: {manifest_path}")
 
-            # NEW: Generate CSV coverage table
             csv_path = web_out_dir / "coverage.csv"
             self._generate_csv(csv_path)
-            logger.info(f"CSV Coverage Table saved to: {csv_path}")
+            logger.info(f"✅ CSV Coverage Table saved to: {csv_path}")
+
+        # UMAP Dispatch
+        if getattr(self.args, 'mode', 'all') in ['umap', 'all']:
+            self._generate_global_umap()
 
         logger.info("SeaDino evaluation pipeline finished successfully!")
 
-    # NEW: CSV Generator Function
     def _generate_csv(self, csv_path: Path):
         headers = ['Image', 'Status', 'Model'] + [self.id_to_class.get(c, f"Class {c}") for c in range(self.num_classes)]
         with open(csv_path, 'w', newline='') as f:
@@ -267,7 +271,6 @@ class SeaDinoPipeline:
         img_pil = TF.resize(orig_pil, [self.config.eval_h, self.config.eval_w], interpolation=TF.InterpolationMode.BILINEAR)
         img_input = TF.normalize(TF.to_tensor(img_pil), mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)).unsqueeze(0).to(self.config.device)
 
-        # FIX: Dynamically pre-allocate results using actually active sizes
         active_sizes = set()
         for bb_data in self.active_models.values():
             for probe_info in bb_data['probes']:
@@ -309,6 +312,24 @@ class SeaDinoPipeline:
                     results[size][bb_type] = {
                         "probs": probs, "pred": prediction, "spread_pct": spread_pct, "name": size_name
                     }
+
+                    # UMAP Feature Extractor
+                    if getattr(self.args, 'mode', 'all') in ['umap', 'all']:
+                        pred_tensor = torch.tensor(prediction, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+                        pred_grid = F.interpolate(pred_tensor, size=(grid_h, grid_w), mode='nearest').squeeze().numpy()
+                        
+                        flat_features = patches.squeeze(0).cpu().numpy()
+                        flat_preds = pred_grid.flatten()
+                        
+                        samples_per_class = 1000
+                        for c in range(self.num_classes):
+                            idx = np.where(flat_preds == c)[0]
+                            if len(idx) > 0:
+                                if len(idx) > samples_per_class:
+                                    idx = np.random.choice(idx, samples_per_class, replace=False)
+                                self.umap_data[size][bb_type]['features'].append(flat_features[idx])
+                                self.umap_data[size][bb_type]['labels'].append(flat_preds[idx])
+
             del out, patches, features
             self._clean_memory()
 
@@ -336,19 +357,15 @@ class SeaDinoPipeline:
             
         if self.args.mode in ['web_ui', 'all']:
             self._export_web_ui(sample_img, base_name, img_np, results)
-            # NEW: Route Matplotlib report directly into Web UI folders if flag is actions
             if getattr(self.args, 'web_include_report', False):
                 reports_dir = Path(getattr(self.args, 'web_out_dir', 'web_ui_outputs')) / "reports"
                 report_types = getattr(self.args, 'web_report_type', ['generate'])
                 
-                # If they pass 'all', run everything
                 if 'all' in report_types:
                     report_types = ['compare', 'compare_single', 'generate', 'heatmaps']
                 
                 for r_type in report_types:
-                    # Optional: We create a sub-folder for each report type so the files don't get messy!
                     type_dir = reports_dir / r_type 
-                    
                     if r_type == 'compare':
                         self._plot_comparison(sample_img, base_name, img_np, gt_colored, gt_mask, results, override_out_dir=type_dir)
                     elif r_type == 'compare_single':
@@ -357,6 +374,57 @@ class SeaDinoPipeline:
                         self._plot_generate(sample_img, base_name, img_np, results, override_out_dir=type_dir)
                     elif r_type == 'heatmaps':
                         self._plot_heatmaps(sample_img, base_name, img_np, results, override_out_dir=type_dir)
+
+    def _generate_global_umap(self):
+        try:
+            import umap.umap_ as umap
+        except ImportError:
+            logger.error("❌ Please install umap-learn to generate UMAP plots: 'pip install umap-learn'")
+            return
+            
+        out_dir = Path("output_umap")
+        out_dir.mkdir(exist_ok=True)
+        
+        for size, bb_results in self.umap_data.items():
+            for bb_type, data in bb_results.items():
+                if len(data['features']) == 0:
+                    continue
+                
+                display_name = self.active_models[bb_type]['display_name']
+                logger.info(f"🧠 Generating UMAP for {display_name} ({size.upper()}). This takes ~30 seconds...")
+                
+                X = np.vstack(data['features'])
+                y = np.concatenate(data['labels'])
+                
+                reducer = umap.UMAP(n_neighbors=15, min_dist=0.1, metric='cosine', random_state=42)
+                embedding = reducer.fit_transform(X, y=y)
+                
+                fig, ax = plt.subplots(figsize=(12, 10))
+                
+                for c in range(self.num_classes):
+                    idx = (y == c)
+                    if np.sum(idx) > 0:
+                        ax.scatter(embedding[idx, 0], embedding[idx, 1], 
+                                   color=self.config.color_palette[c], 
+                                   label=self.id_to_class.get(c, f"Class {c}"), 
+                                   s=15, alpha=0.8, edgecolors='none')
+                
+                ax.set_title(f"DINOv3 Latent Space UMAP - {display_name} ({size.capitalize()})", fontsize=18, fontweight='bold', pad=20)
+                
+                legend_patches = []
+                for c in range(self.num_classes):
+                    raw_name = self.id_to_class.get(c, f"Class {c}").replace('_', ' ')
+                    clean_name = textwrap.fill(raw_name, width=25) 
+                    legend_patches.append(mpatches.Patch(color=self.config.color_palette[c], label=clean_name))
+                ax.legend(handles=legend_patches, loc='center left', bbox_to_anchor=(1, 0.5), fontsize=12)
+                
+                ax.axis('off')
+                plt.tight_layout()
+                
+                umap_path = out_dir / f"umap_{bb_type}_{size}.png"
+                plt.savefig(umap_path, dpi=300, bbox_inches='tight')
+                plt.close(fig)
+                logger.info(f"✅ UMAP saved to: {umap_path}")
 
     def _export_web_ui(self, sample_img: str, base_name: str, img_np: np.ndarray, results: dict):
         web_out_dir = Path(getattr(self.args, 'web_out_dir', 'web_ui_outputs'))
@@ -391,7 +459,6 @@ class SeaDinoPipeline:
                 "predictions": {}
             }
 
-        # 🌟 NEW: Get and normalize target classes from CLI (strip spaces and lowercase for safety)
         target_classes = getattr(self.args, 'web_target_classes', None)
         target_set = {tc.strip().lower() for tc in target_classes} if target_classes else None
 
@@ -408,6 +475,18 @@ class SeaDinoPipeline:
                 combined_mask_name = f"overlay_{base_name}_{bb_type}-{size}_ALL.png"
                 combined_mask_pil.save(masks_dir / combined_mask_name, format="PNG")
                 
+                # 🌟 NEW: Generate "Hidden Data Layers" for the Web UI Hover Tool
+                # 1. Hidden Class ID Mask (Grayscale: 0 to 5)
+                hidden_class_pil = Image.fromarray(pred.astype(np.uint8), "L")
+                hidden_class_name = f"hidden_class_{base_name}_{bb_type}-{size}.png"
+                hidden_class_pil.save(masks_dir / hidden_class_name, format="PNG")
+                
+                # 2. Hidden Max Confidence Map (Grayscale: 0 to 255)
+                max_probs = probs.max(axis=0)
+                hidden_conf_pil = Image.fromarray((max_probs * 255).astype(np.uint8), "L")
+                hidden_conf_name = f"hidden_conf_{base_name}_{bb_type}-{size}.png"
+                hidden_conf_pil.save(conf_dir / hidden_conf_name, format="PNG")
+
                 spread_data = {}
                 individual_masks = {}
                 confidence_maps = {} 
@@ -420,14 +499,11 @@ class SeaDinoPipeline:
                     if spread_pct[c] > 0 and "background" not in class_name.lower():
                         safe_class_name = class_name.replace(" ", "_")
                         
-                        # 🌟 NEW: Check if this specific class is targeted by the UI
                         is_targeted = True
                         if target_set is not None:
                             is_targeted = (class_name.lower() in target_set) or (safe_class_name.lower() in target_set)
                         
-                        # ONLY save these extra files if both flags are met!
                         if export_extras and is_targeted:
-                            # 1. Save Individual Class Mask
                             class_pixels = (pred == c)
                             rgba_img = np.zeros((pred.shape[0], pred.shape[1], 4), dtype=np.uint8)
                             color = (self.config.color_palette[c] * 255).astype(np.uint8)
@@ -439,7 +515,6 @@ class SeaDinoPipeline:
                             class_mask_pil.save(masks_dir / class_mask_name, format="PNG")
                             individual_masks[class_name] = f"{folder_name}/masks/{class_mask_name}"
                             
-                            # 2. Save Hover Confidence Map
                             conf_img = (probs[c] * 255).astype(np.uint8)
                             conf_pil = Image.fromarray(conf_img, "L") 
                             conf_name = f"conf_{base_name}_{bb_type}-{size}_{safe_class_name}.png"
@@ -448,8 +523,11 @@ class SeaDinoPipeline:
                 
                 prediction_key = f"{display_name}-{size}"
                 
+                # 🌟 UPDATED: Dynamically build the JSON payload with hidden hover layers
                 pred_payload = {
                     "overlay_mask_combined": f"{folder_name}/masks/{combined_mask_name}",
+                    "hidden_hover_class": f"{folder_name}/masks/{hidden_class_name}",
+                    "hidden_hover_confidence": f"{folder_name}/confidence/{hidden_conf_name}",
                     "coverage": spread_data
                 }
                 
@@ -492,7 +570,7 @@ class SeaDinoPipeline:
                 axes = axes.flatten()
                 axes[0].imshow(img_np); axes[0].set_title(f"Raw Input\n{sample_img}", fontsize=14); axes[0].axis('off')
                 axes[1].imshow(img_np); axes[1].imshow(rgba_pred)
-                axes[1].set_title(f"Prediction [{display_name} | {p_name}]", fontsize=14); axes[1].axis('off')
+                axes[1].set_title(f"Winning Prediction [{display_name} | {p_name}]", fontsize=14); axes[1].axis('off')
                 
                 present_classes = np.unique(pred)
                 legend_patches = [
@@ -513,16 +591,11 @@ class SeaDinoPipeline:
                 fig.clf() 
                 plt.close(fig)
 
-
-    # NEW: Added override_out_dir parameter to support the Web export flag
     def _plot_comparison(self, sample_img: str, base_name: str, img_np: np.ndarray, gt_colored: np.ndarray, gt_mask: np.ndarray, results: dict, override_out_dir: Path = None):
-        # 1. Gather all active predictions across all models and sizes in a stable order
         predictions_list = []
         
-        # Sort sizes to keep them predictable
         sorted_sizes = sorted(results.keys()) 
         for size in sorted_sizes:
-            # Check 'org' then 'fg' to maintain standard side-by-side ordering
             for bb_type in ['org', 'fg']: 
                 if bb_type in results[size] and bb_type in self.active_models:
                     res = results[size][bb_type]
@@ -537,7 +610,6 @@ class SeaDinoPipeline:
             logger.warning(f"Skipping comparison report for {sample_img}: No active predictions found.")
             return
 
-        # 2. Determine output directory
         out_dir = override_out_dir if override_out_dir else Path("output_comparisons")
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -547,7 +619,6 @@ class SeaDinoPipeline:
             gt_alpha = np.where(gt_safe == 0, 0.0, 0.6)
             rgba_gt = np.dstack((gt_colored, gt_alpha))
 
-        # 3. Loop through predictions in pairs of 2 and generate side-by-side grids
         for idx in range(0, len(predictions_list), 2):
             pred1 = predictions_list[idx]
             pred2 = predictions_list[idx+1] if idx+1 < len(predictions_list) else None
@@ -555,12 +626,10 @@ class SeaDinoPipeline:
             fig, axes = plt.subplots(2, 2, figsize=(24, 13))
             axes = axes.flatten()
             
-            # Top-Left: Raw Input
             axes[0].imshow(img_np)
             axes[0].set_title(f"Input Image\n{sample_img}", fontsize=14)
             axes[0].axis('off')
             
-            # Top-Right: Ground Truth
             if rgba_gt is not None:
                 axes[1].imshow(img_np)
                 axes[1].imshow(rgba_gt)
@@ -570,27 +639,24 @@ class SeaDinoPipeline:
                 axes[1].set_title("Ground Truth", fontsize=14)
             axes[1].axis('off')
 
-            # Bottom-Left: Prediction 1
             p1_mask = pred1["pred"]
             rgba_p1 = np.dstack((self.config.color_palette[p1_mask], np.where(p1_mask == 0, 0.0, 0.6)))
             axes[2].imshow(img_np)
             axes[2].imshow(rgba_p1)
-            axes[2].set_title(f"{pred1['label']} Overlay", fontsize=14)
+            axes[2].set_title(f"{pred1['label']} Overlay", fontsize=14, fontweight='bold')
             axes[2].axis('off')
 
-            # Bottom-Right: Prediction 2 (If it exists, otherwise show empty slot)
             if pred2 is not None:
                 p2_mask = pred2["pred"]
                 rgba_p2 = np.dstack((self.config.color_palette[p2_mask], np.where(p2_mask == 0, 0.0, 0.6)))
                 axes[3].imshow(img_np)
                 axes[3].imshow(rgba_p2)
-                axes[3].set_title(f"{pred2['label']} Overlay", fontsize=14)
+                axes[3].set_title(f"{pred2['label']} Overlay", fontsize=14, fontweight='bold')
             else:
                 axes[3].text(0.5, 0.5, "No Alternative Model/Size Loaded", ha='center', va='center', fontsize=20, color='gray')
                 axes[3].set_title("Comparison", fontsize=14)
             axes[3].axis('off')
 
-            # Legend
             legend_patches = []
             for c in range(self.num_classes):
                 raw_name = self.id_to_class.get(c, f"Class {c}").replace('_', ' ')
@@ -600,7 +666,6 @@ class SeaDinoPipeline:
             fig.legend(handles=legend_patches, loc='lower center', ncol=3, bbox_to_anchor=(0.5, 0.0), fontsize=14)
             plt.tight_layout(rect=[0, 0.08, 1, 1]) 
             
-            # Generate a perfectly clean dynamic filename
             p1_safe = pred1['label'].replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "")
             if pred2:
                 p2_safe = pred2['label'].replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "")
@@ -665,7 +730,6 @@ class SeaDinoPipeline:
                 axes[1].imshow(pred_colored); axes[1].set_title(f"Predicted Mask ({size.capitalize()})", fontsize=14); axes[1].axis('off')
                 axes[2].imshow(img_np); axes[2].imshow(rgba_pred); axes[2].set_title(f"Overlay Mask ({display_name})", fontsize=14, fontweight='bold'); axes[2].axis('off')
 
-            
                 present_classes = np.unique(pred)
                 legend_patches = []
                 for c in present_classes:

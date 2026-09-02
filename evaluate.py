@@ -9,7 +9,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate Tiny-Big Probes for SeaDino-Seg-1 Models.")
     
     parser.add_argument('--mode', type=str, 
-                        choices=['heatmaps', 'compare', 'compare_single', 'generate', 'all', 'web_ui'], 
+                        choices=['heatmaps', 'compare', 'compare_single', 'generate', 'all', 'web_ui', 'umap'], 
                         default='all')
 
     # NEW: Flag to include Matplotlib reports in the web export
@@ -33,8 +33,7 @@ def parse_args():
                         help="Probe sizes specifically for Original Baseline model (overrides --sizes).")
     parser.add_argument('--ft_sizes', type=str, nargs='+', choices=['tiny', 'small', 'medium', 'big'], default=None,
                         help="Probe sizes specifically for Fine-Tuned model (overrides --sizes).")
-    
-    
+
     
     parser.add_argument('--hf_repo', type=str, default="SeaDinoWeb/Algea_Segmentation_Model")
     parser.add_argument('--sizes', type=str, nargs='+', choices=['tiny', 'small', 'medium', 'big'], default=['small'])
@@ -52,7 +51,7 @@ def parse_args():
     parser.add_argument('--ft_probe_medium', type=str, default="SeaDino-Seg-1-Fg-Medium.pth")
     parser.add_argument('--ft_probe_big', type=str, default="SeaDino-Seg-1-Fg-Big.pth")
     
-    parser.add_argument('--base_dir', type=str, default="/home/neel/d_drive/ai_data/data/data_to_ivy")
+    parser.add_argument('--base_dir', type=str, default="/home/neel/d_drive/ai_data/data/data_to_ivy/test")
     parser.add_argument('--masks_dir', type=str, default=None)
     parser.add_argument('--num_imgs', type=int, default=20)
     parser.add_argument('--image', type=str, default=None, help="Path to a single image file (overrides base_dir loop).")
