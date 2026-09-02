@@ -11,6 +11,7 @@ An advanced evaluation pipeline for DINOv3-based benthic segmentation models. Tr
 
 ```text
 SeaDino_Project/
+├── input/             # Place your raw survey/benthic images here to evaluate
 ├── .env.example       # Environment template for secure Hugging Face token
 ├── config.py          # Static settings (DPI, color palette, resolutions)
 ├── models.py          # Neural Network definitions (Tiny to Big heads)
@@ -24,47 +25,49 @@ SeaDino_Project/
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Installation & Setup
 
-Ensure you have Anaconda or Miniconda installed, then set up the environment:
+Ensure you have Anaconda or Miniconda installed, then follow these steps:
 
-**1. Create and activate the conda environment:**
+### 1. Create and activate the conda environment
 ```bash
 conda env create -f environment.yml
 conda activate seadino_env
-pip install -r requirements.txt
 ```
+*(Note: If you are setting this up manually without Conda, you can use Python 3.13 and run `pip install -r requirements.txt` instead).*
 
-**2. Configure Secure Hugging Face Access (Required):**
+> **GPU Users:** Ensure your environment has the correct PyTorch version matching your CUDA architecture installed so the model runs efficiently on a GPU.
+
+### 2. Configure Secure Hugging Face Access (Required)
 The fine-tuned model weights are hosted in a private Hugging Face repository. To allow the script to download them securely:
-* Rename `.env.example` to `.env`
-* Open the `.env` file and replace the placeholder with your Hugging Face Access Token:
-  ```text
-  HF_TOKEN=hf_YourCopiedTokenHere
-  ```
+1. Copy or rename `.env.example` to `.env`.
+2. Open the `.env` file and insert your Hugging Face Access Token:
+   ```text
+   HF_TOKEN=hf_YourCopiedTokenHere
+   ```
 
 ---
 
-## 💻 Evaluation Pipeline
+## 💻 How to Run Evaluations
 
-Run the pipeline using `evaluate.py`. The script automatically retrieves the necessary backbone and probe weights securely using your `.env` configuration.
+Place your target images into your input directory, then run the pipeline using `evaluate.py`. The script will automatically fetch necessary backbone and probe weights securely using your `.env` configuration.
 
 ### 1. Web UI Export (Optimized for Frontend Integration)
 
 Generates a production-ready, highly organized export designed for web servers and interactive dashboards.
 * **Organized Architecture:** Saves assets cleanly into `/images`, `/masks`, and `/confidence` subfolders.
-* **Pixel-Perfect Alignment:** AI masks are dynamically upsampled in the backend to match the exact original aspect ratio of the raw uploaded images (e.g., 1920x1080), eliminating padding artifacts.
-* **Automatic CSV Generation:** Generates a clean `coverage.csv` table containing the raw, mathematically correct species-spread statistics for all processed images.
-* **Interactive Web Layers:** Generates hidden class and confidence maps allowing frontend UIs to build real-time pixel-wise hover tooltips.
-* **Performance-Optimized:** To prevent server disk bloat, heavy visualization assets (individual class layers and hover confidence maps) are turned off by default. Use `--web_export_extras` to generate them.
-* **Species-Specific Filtering:** Use `--web_target_classes` to generate individual masks/confidence maps only for the exact species selected by the user.
+* **Pixel-Perfect Alignment:** Masks are dynamically upsampled in the backend to match the exact original aspect ratio of the raw uploaded images (e.g., 1920x1080), eliminating padding artifacts.
+* **Automatic CSV Generation:** Generates a clean `coverage.csv` table at the end of the run containing raw, mathematically correct species-spread statistics for all processed images.
+* **Performance-Optimized Extra Assets:** To prevent server disk/I/O bloat, heavy visualization assets (individual class layers and hover confidence maps) are turned off by default. Use `--web_export_extras` to generate them.
+* **Species-Specific Filtering:** Use `--web_target_classes` to generate individual masks/confidence maps only for specific species selected by the user.
+* **Dynamic Reports:** Use `--web_include_report` and `--web_report_type` to automatically generate and save Matplotlib reports directly inside `/reports/`.
 
 **Example: Run the basic fast Web UI export:**
 ```bash
 python evaluate.py --run_ft --sizes small --mode web_ui --web_out_dir web_ui_outputs
 ```
 
-**Example: Advanced Run (Export extras only for Ecklonia, and generate both Generate and Heatmap reports):**
+**Example: Advanced Run (Export extras only for Ecklonia, and generate reports):**
 ```bash
 python evaluate.py --run_ft --sizes small --mode web_ui --web_export_extras --web_target_classes "Ecklonia_Deepwatercove" --web_include_report --web_report_type generate heatmaps
 ```
@@ -73,9 +76,7 @@ python evaluate.py --run_ft --sizes small --mode web_ui --web_export_extras --we
 
 ### 2. Side-by-Side Comparison (2x2 Grid)
 
-Generates a comparison grid.
-* **Fully Generalized:** The engine dynamically pairs and displays **any two** predictions side-by-side. 
-* This allows you to compare different model sizes (e.g., `Fg (Tiny)` vs `Fg (Small)`) or different architectures (e.g., `Model Kiwi (Org)` vs `Model Moana (Fg)`) on a single canvas.
+Generates a comparison grid dynamically pairing and displaying **any two** predictions side-by-side (e.g., comparing model sizes like `Fg (Tiny)` vs `Fg (Small)` or architectures like `Baseline (Org)` vs `Fine-Tuned (Fg)`).
 
 ```bash
 python evaluate.py --run_base --run_ft --sizes small --mode compare
@@ -83,40 +84,55 @@ python evaluate.py --run_base --run_ft --sizes small --mode compare
 
 ### 3. Class Confidence Heatmaps (2x4 Grid)
 
-Generates confidence heatmaps for all 6 benthic classes individually.
+Generates confidence heatmaps for all benthic classes individually.
 
 ```bash
 python evaluate.py --run_base --run_ft --sizes small --mode heatmaps
 ```
 
-### 4. Dimensionality Reduction (UMAP)
+### 4. Generate Everything (Research Mode)
 
-Extracts DINOv3 latent features and generates a Supervised 2D UMAP scatterplot to mathematically verify class clustering and AI biological distinction.
+Runs both comparison and heatmap visualizations simultaneously.
 
 ```bash
-python evaluate.py --run_ft --sizes small --mode umap
+python evaluate.py --run_base --run_ft --sizes small --mode all
 ```
 
 ---
 
-## 🛠️ Advanced Configuration Flags
+## ⚙️ Advanced Command-Line Flags
 
-* `--sizes`: Select global probe sizes to evaluate (`tiny`, `small`, `medium`, `big`). You can run multiple sizes sequentially.
-* `--base_sizes`: Override probe sizes specifically for the Original Baseline model (Model Kiwi).
-* `--ft_sizes`: Override probe sizes specifically for the Fine-Tuned model (Model Moana).
-* `--web_export_extras`: Toggle the export of individual transparent class masks and pixel-wise grayscale confidence maps.
-* `--web_target_classes`: Restrict extra visual assets only to a specified list of class names.
-* `--web_include_report`: Enable saving of Matplotlib reports into the web folder.
-* `--web_report_type`: Select which Matplotlib reports to include (supports multiple: `compare`, `compare_single`, `generate`, `heatmaps`, `all`).
-* `--eval_w` and `--eval_h`: Change the image evaluation resolution (must be divisible by 16).
-* `--dpi`: Set image export quality. Lower values speed up file writing (recommended range: 100 to 600).
-* `--num_imgs`: Limit the number of images processed from your raw folder.
+Fine-tune your evaluation runs using the parameters below:
+
+### 🧩 Model & Size Configuration
+* `--sizes`: Select global probe sizes to evaluate (`tiny`, `small`, `medium`, `big`). Run multiple sequentially:
+  ```bash
+  python evaluate.py --run_ft --sizes tiny small
+  ```
+* `--base_sizes` / `--ft_sizes`: Override probe sizes specifically for the Original Baseline or Fine-Tuned models independently.
+
+### 🌐 Web UI Export Tweaks
+* `--web_export_extras`: Toggle export of heavy visual assets (individual transparent class masks and pixel-wise grayscale confidence maps) to prevent server disk bloat.
+* `--web_target_classes`: Restrict extra visual assets only to specified classes:
+  ```bash
+  python evaluate.py --run_ft --sizes small --mode web_ui --web_export_extras --web_target_classes "Rock_Deepwatercove" "Ecklonia_Deepwatercove"
+  ```
+* `--web_include_report`: Enable saving Matplotlib summary reports directly into the web output directory.
+* `--web_report_type`: Choose specific report layouts (supports multiple simultaneously: `compare`, `compare_single`, `generate`, `heatmaps`, `all`).
+
+### 📐 Resolution, Quality & Batch Control
+* `--eval_w` & `--eval_h`: Change image evaluation resolution *(Note: Dimensions must be divisible by 16)*:
+  ```bash
+  python evaluate.py --run_ft --sizes small --eval_w 1280 --eval_h 720
+  ```
+* `--dpi`: Set image export quality. Lower values speed up file writing (recommended range: `100` to `600`).
+* `--num_imgs`: Limit the total number of images processed from your raw folder (default is `20`).
 
 ---
 
 ## 📊 Analytics & Reporting
 
-The pipeline automatically calculates and logs the **Spread % (Percent Cover)** of each benthic class both per-image and globally across the entire batch (total survey coverage) at the end of execution. Bad uploads (corrupted images, PDFs) are safely intercepted and logged as errors in the JSON manifest without crashing the pipeline.
+The pipeline automatically calculates and logs the **Spread % (Percent Cover)** of each benthic class both per-image and globally across the entire batch (total survey coverage) upon completion. Bad uploads (corrupted images, PDFs) are safely intercepted and logged as errors in the JSON manifest without crashing the pipeline.
 
 ---
 
