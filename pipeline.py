@@ -397,7 +397,10 @@ class SeaDinoPipeline:
                     if r_type == 'compare':
                         self._plot_comparison(sample_img, base_name, img_np, gt_colored, gt_mask, results, override_out_dir=type_dir)
                     elif r_type == 'compare_single':
-                        self._plot_compare_single(sample_img, base_name, img_np, gt_colored, gt_mask, results, override_out_dir=type_dir)
+                        if gt_colored is not None:
+                            self._plot_compare_single(sample_img, base_name, img_np, gt_colored, gt_mask, results, override_out_dir=type_dir)
+                        else:
+                            logger.warning(f"Skipping compare_single: No GT mask found for {sample_img}")
                     elif r_type == 'generate':
                         self._plot_generate(sample_img, base_name, img_np, results, override_out_dir=type_dir)
                     elif r_type == 'heatmaps':
